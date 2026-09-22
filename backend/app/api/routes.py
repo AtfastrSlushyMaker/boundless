@@ -139,6 +139,15 @@ async def _detail(session: AsyncSession, campaign: Campaign, branch: Branch) -> 
     })
 
 
+@router.get("/ready", include_in_schema=False)
+async def ready(session: AsyncSession = Depends(get_session)):
+    try:
+        await session.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(503, "Database unavailable.") from exc
+    return {"status": "ready"}
+
+
 @router.get("/health")
 async def health(session: AsyncSession = Depends(get_session)):
     database = "connected"

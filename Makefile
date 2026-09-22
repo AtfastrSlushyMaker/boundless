@@ -1,10 +1,19 @@
-.PHONY: db-up db-down migrate api web test lint mlx
+.PHONY: stack-up stack-down stack-logs db-up db-down migrate api web test lint mlx
+
+stack-up:
+	docker compose up -d --build --wait
+
+stack-down:
+	docker compose down
+
+stack-logs:
+	docker compose logs -f api web
 
 db-up:
-	docker compose up -d --wait
+	docker compose up -d --wait db
 
 db-down:
-	docker compose down
+	docker compose stop db
 
 migrate:
 	cd backend && uv run alembic upgrade head

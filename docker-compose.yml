@@ -1,3 +1,18 @@
+x-api-build: &api-build
+  context: ./backend
+
+x-api-environment: &api-environment
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-boundless}:${POSTGRES_PASSWORD:-boundless_dev}@db:5432/${POSTGRES_DB:-boundless}
+  FRONTEND_ORIGIN: http://localhost:${FRONTEND_PORT:-3000}
+  LLM_PROVIDER: ${COMPOSE_LLM_PROVIDER:-ollama}
+  LLM_BASE_URL: ${COMPOSE_LLM_BASE_URL:-http://host.docker.internal:11434}
+  LLM_MODEL: ${COMPOSE_LLM_MODEL:-qwen3.5:9b}
+  LLM_API_KEY: ${LLM_API_KEY:-none}
+  LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-240}
+  LLM_CONTEXT_WINDOW: ${LLM_CONTEXT_WINDOW:-131072}
+  LLM_MAX_OUTPUT_TOKENS: ${LLM_MAX_OUTPUT_TOKENS:-1200}
+  LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.82}
+
 services:
   db:
     image: pgvector/pgvector:0.8.6-pg18-trixie
@@ -17,5 +32,52 @@ services:
       retries: 12
       start_period: 10s
 
+  migrate:
+    image: boundless-api:local
+    build: *api-build
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment: *api-environment
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    image: boundless-api:local
+    build: *api-build
+    restart: unless-stopped
+    environment: *api-environment
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    volumes:
+      - api_secrets:/app/.secrets
+    mem_limit: 768m
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    image: boundless-web:local
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://127.0.0.1:${APP_PORT:-8000}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+    mem_limit: 768m
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+  api_secrets:
