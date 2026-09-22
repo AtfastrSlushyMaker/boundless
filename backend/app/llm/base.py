@@ -1,0 +1,13 @@
+from collections.abc import AsyncIterator
+from typing import Any, Protocol
+
+
+class ModelUnavailable(RuntimeError):
+    pass
+
+
+class LLMProvider(Protocol):
+    async def health(self) -> dict[str, Any]: ...
+    async def complete(self, messages: list[dict[str, str]], **options: Any) -> str: ...
+    async def complete_json(self, messages: list[dict[str, str]], **options: Any) -> str: ...
+    def stream_chat(self, messages: list[dict[str, str]], **options: Any) -> AsyncIterator[str]: ...
