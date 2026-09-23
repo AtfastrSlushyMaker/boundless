@@ -92,6 +92,13 @@ export type ModelSettings = {
 };
 
 export type SystemCapabilities = { mlx_supported: boolean; mlx_default_base_url: string };
+export type MlxRuntime = {
+  launcher_available: boolean;
+  server_status: "running" | "starting" | "offline" | "unknown";
+  models: Array<{ id: string; name: string }>;
+  selected_model?: string | null;
+  detail?: string;
+};
 
 export type StreamEvent =
   | { type: "delta"; text: string; turn_id: string }
@@ -129,6 +136,10 @@ export const api = {
   rewind: (id: string, branchId: string, turnId: string) => request<CampaignDetail>(`/api/campaigns/${id}/rewind?branch_id=${branchId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turn_id: turnId }) }),
   editTurn: (turnId: string, content: string) => request<CampaignDetail>(`/api/turns/${turnId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }),
   settings: () => request<ModelSettings>("/api/settings/model"),
+  mlxRuntime: () => request<MlxRuntime>("/api/settings/mlx/runtime"),
+  startMlx: (model: string) => request<{ server_status: string; detail: string }>("/api/settings/mlx/start", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }),
+  }),
   ollamaModels: (baseUrl: string) => request<{ models: string[] }>(`/api/settings/ollama/models?base_url=${encodeURIComponent(baseUrl)}`),
   compatibleModels: (baseUrl: string) => request<{ models: string[] }>(`/api/settings/openai-compatible/models?base_url=${encodeURIComponent(baseUrl)}`),
   deepseekModels: (apiKey?: string) => request<{ models: string[] }>("/api/settings/deepseek/models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: apiKey || undefined }) }),

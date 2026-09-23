@@ -1,7 +1,12 @@
-.PHONY: stack-up stack-down stack-logs db-up db-down migrate api web test lint mlx
+.PHONY: stack-up stack-down stack-logs db-up db-down migrate api web test lint mlx mlx-host
 
 stack-up:
-	docker compose up -d --build --wait
+	@if [ "$$(uname -s)" = Darwin ] && [ "$$(uname -m)" = arm64 ]; then \
+		if command -v python3 >/dev/null 2>&1; then python3 scripts/mlx_host.py --ensure || echo "MLX launcher unavailable; run make mlx-host after setup."; fi; \
+		HOST_MLX_SUPPORTED=true docker compose up -d --build --wait; \
+	else \
+		docker compose up -d --build --wait; \
+	fi
 
 stack-down:
 	docker compose down
@@ -33,3 +38,6 @@ lint:
 
 mlx:
 	mlx_lm.server --model lukey03/Qwen3.5-9B-abliterated-MLX-4bit --host 127.0.0.1 --port 8088
+
+mlx-host:
+	python3 scripts/mlx_host.py --ensure

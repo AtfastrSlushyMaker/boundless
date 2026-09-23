@@ -26,6 +26,7 @@ from app.llm.gateway import get_provider
 from app.schemas import StateInterpretation
 from app.services.canon_guard import CanonViolation, check_narrative
 from app.services.context_builder import build_messages
+from app.services.narration import stream_narration
 from app.services.state_service import apply_interpretation, capture_snapshot
 
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts"
@@ -180,7 +181,7 @@ async def stream_turn(session: AsyncSession, campaign: Campaign, branch: Branch,
                                     context_window=profile.context_window if profile and is_local_runtime else None)
     full = ""
     try:
-        async for piece in provider.stream_chat(
+        async for piece in stream_narration(provider,
             messages,
             max_tokens=LENGTH_TOKENS.get(profile.response_length if profile else "standard", 1200),
             temperature=profile.temperature if profile else settings.llm_temperature,

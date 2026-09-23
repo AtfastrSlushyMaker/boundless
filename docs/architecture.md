@@ -18,7 +18,7 @@ flowchart LR
 
 The root Compose file starts PostgreSQL, a one-shot Alembic migration service, the API, and the web app. Both application images are built from their own directories. Compose waits for PostgreSQL health and successful migrations before starting the API, then waits for API readiness before starting the web app. The application ports bind to host loopback. PostgreSQL data and Docker API secrets use named volumes.
 
-The native workflow starts only PostgreSQL in Compose. FastAPI and Next.js run on the host. The Docker workflow can also use a native Apple Silicon MLX server through `host.docker.internal` when `HOST_MLX_SUPPORTED=true` is declared for that host. Model endpoints and saved profiles decide which provider handles requests; saved MLX loopback URLs are mapped to the Docker host gateway.
+The native workflow starts only PostgreSQL in Compose. FastAPI and Next.js run on the host. The Docker workflow can also use a native Apple Silicon MLX server through `host.docker.internal` when `HOST_MLX_SUPPORTED=true` is declared for that host. A loopback-only Mac companion lists downloaded models and launches the selected MLX server when asked by the API. `make stack-up` starts this companion on Apple Silicon Macs. Model endpoints and saved profiles decide which provider handles requests; saved MLX loopback URLs are mapped to the Docker host gateway.
 
 ## Campaign and canon
 

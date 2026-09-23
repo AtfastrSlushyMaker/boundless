@@ -20,6 +20,7 @@ from app.db.models import (
     Secret,
     Turn,
 )
+from app.services.narration import clean_history_narration
 from app.services.retrieval import rank_memories
 
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts"
@@ -116,7 +117,7 @@ async def build_messages(session: AsyncSession, campaign: Campaign, branch_id: U
         if turn.player_action:
             messages.append({"role": "user", "content": turn.player_action[:8000]})
         if turn.gm_response:
-            messages.append({"role": "assistant", "content": turn.gm_response[:12000]})
+            messages.append({"role": "assistant", "content": clean_history_narration(turn.gm_response)[:12000]})
     current = action
     if instruction:
         current += f"\n\nTemporary direction for this response only: {instruction}"

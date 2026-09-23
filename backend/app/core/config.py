@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     embedding_model: str = ""
     host_mlx_supported: bool = False
     mlx_host_base_url: str = "http://host.docker.internal:8088/v1"
+    mlx_launcher_base_url: str = "http://127.0.0.1:8091"
 
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",

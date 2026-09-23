@@ -29,6 +29,23 @@ def mlx_base_url(base_url: str | None = None) -> str:
 
 
 class MLXProvider(OpenAICompatibleProvider):
+    @staticmethod
+    def _narration_options(options: dict) -> dict:
+        # mlx_lm.server accepts both fields on each chat request. The template
+        # setting also works when the user started the server outside Boundless.
+        return {
+            "stop": ["<|im_end|>", "<|im_start|>"],
+            "chat_template_kwargs": {"enable_thinking": False},
+            **options,
+        }
+
+    async def complete(self, messages: list[dict[str, str]], **options) -> str:
+        return await super().complete(messages, **self._narration_options(options))
+
+    async def stream_chat(self, messages: list[dict[str, str]], **options):
+        async for text in super().stream_chat(messages, **self._narration_options(options)):
+            yield text
+
     async def _probe_generation(self) -> bool:
         try:
             await self.complete([{"role": "user", "content": "Reply with OK."}], max_tokens=2, temperature=0)

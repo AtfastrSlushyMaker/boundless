@@ -20,6 +20,12 @@ function deepseekModelLabel(model: string): string {
   return model;
 }
 
+function modelDisplayLabel(provider: ModelSettings["provider"], model: string): string {
+  if (provider === "deepseek") return deepseekModelLabel(model);
+  if (provider === "mlx") return model.split("/").filter(Boolean).at(-1) ?? model;
+  return model;
+}
+
 function isLoopbackEndpoint(endpoint: string): boolean {
   try {
     const hostname = new URL(endpoint).hostname.replace(/^\[|\]$/g, "").toLowerCase();
@@ -80,14 +86,37 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
     staleTime: 30_000,
   });
   const installedModels = ollamaModels.data?.models ?? [];
+  const mlxRuntime = useQuery({
+    queryKey: ["mlx-runtime"],
+    queryFn: api.mlxRuntime,
+    enabled: open && form.provider === "mlx" && mlxSupported,
+    refetchInterval: open && form.provider === "mlx" ? 3_000 : false,
+    retry: false,
+  });
   const mlxModels = useQuery({
     queryKey: ["mlx-models", form.base_url],
     queryFn: () => api.compatibleModels(form.base_url),
     enabled: open && form.provider === "mlx" && mlxSupported,
     retry: false,
+    refetchInterval: (query) => open && form.provider === "mlx" && query.state.status !== "success" ? 3_000 : false,
     staleTime: 30_000,
   });
-  const availableMlxModels = mlxModels.data?.models ?? [];
+  const installedMlxModels = mlxRuntime.data?.models ?? [];
+  const availableMlxModels = Array.from(new Set([
+    ...installedMlxModels.map((entry) => entry.id), ...(mlxModels.data?.models ?? []),
+  ]));
+  const mlxUsesDefaultEndpoint = form.base_url.replace(/\/$/, "") === mlxDefaultEndpoint.replace(/\/$/, "");
+  const mlxServerRunning = mlxUsesDefaultEndpoint && mlxRuntime.data?.launcher_available
+    ? mlxRuntime.data.server_status === "running" : mlxModels.isSuccess;
+  const selectedMlxModel = installedMlxModels.length === 1 && (form.model === initial.model || !form.model.trim())
+    ? installedMlxModels[0].id : form.model;
+  const selectedMlxInstalled = installedMlxModels.some((entry) => entry.id === selectedMlxModel);
+  useEffect(() => {
+    if (mlxRuntime.data?.server_status === "running") {
+      void client.invalidateQueries({ queryKey: ["mlx-models"] });
+      void client.invalidateQueries({ queryKey: ["model-settings"] });
+    }
+  }, [client, mlxRuntime.data?.server_status]);
   const selectedOllamaModel = installedModels.find((name) => name.toLowerCase() === form.model.toLowerCase()) ?? form.model;
   const deepseekModels = useQuery({
     queryKey: ["deepseek-models", query.data?.api_key_configured],
@@ -98,13 +127,29 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
   });
   const servedDeepseekModels = deepseekModels.data?.models ?? [];
   const connectionChanged = Boolean(query.data && (
-    form.provider !== query.data.provider || form.base_url !== query.data.base_url || form.model !== query.data.model || Boolean(deepseekApiKey.trim())
+    form.provider !== query.data.provider || form.base_url !== query.data.base_url || (form.provider === "mlx" ? selectedMlxModel : form.model) !== query.data.model || Boolean(deepseekApiKey.trim())
   ));
   const save = useMutation({
-    mutationFn: () => api.saveSettings({ ...form, api_key: form.provider === "deepseek" ? deepseekApiKey.trim() || undefined : undefined }),
+    mutationFn: () => api.saveSettings({ ...form, model: form.provider === "mlx" ? selectedMlxModel : form.model,
+      api_key: form.provider === "deepseek" ? deepseekApiKey.trim() || undefined : undefined }),
     onSuccess: async () => {
       setDeepseekApiKey("");
       setMessage("Model profile saved.");
+      await client.invalidateQueries({ queryKey: ["model-settings"] });
+      await client.invalidateQueries({ queryKey: ["health"] });
+    },
+    onError: (error) => setMessage(error.message),
+  });
+  const startMlx = useMutation({
+    mutationFn: async () => {
+      const result = await api.startMlx(selectedMlxModel);
+      await api.saveSettings({ ...form, provider: "mlx", model: selectedMlxModel });
+      return result;
+    },
+    onSuccess: async () => {
+      setMessage("MLX is starting. The first load may take a moment.");
+      await client.invalidateQueries({ queryKey: ["mlx-runtime"] });
+      await client.invalidateQueries({ queryKey: ["mlx-models"] });
       await client.invalidateQueries({ queryKey: ["model-settings"] });
       await client.invalidateQueries({ queryKey: ["health"] });
     },
@@ -125,14 +170,13 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
         transition={{ duration: reduceMotion ? 0 : 0.2, ease: "easeOut" }}>
         <header className="dialog-head">
           <div>
-            <p className="section-overline">MODEL CONNECTION</p>
             <h2 id="settings-title">Model settings</h2>
           </div>
           <button className="icon-button" aria-label="Close model settings" onClick={closeDialog}><X size={18} /></button>
         </header>
         <div className="model-health-line">
           {query.isLoading ? <LoaderCircle className="spin" size={16} /> : connectionChanged ? <CircleX size={16} /> : query.data?.health?.status === "connected" ? <Activity size={16} /> : <CircleX size={16} />}
-          <span>{connectionChanged ? "Unsaved model selection" : query.data?.health?.status === "connected" ? `Connected · ${query.data.provider === "deepseek" ? deepseekModelLabel(query.data.model) : query.data.model}` : query.data?.health?.status === "offline" ? "Model server is offline" : query.data?.health?.status === "loading" ? "Model is loading" : query.isLoading ? "Checking saved endpoint" : "No model profile yet"}</span>
+          <span>{connectionChanged ? "Unsaved model selection" : query.data?.health?.status === "connected" ? `Connected · ${modelDisplayLabel(query.data.provider, query.data.model)}` : query.data?.health?.status === "offline" ? "Model server is offline" : query.data?.health?.status === "loading" ? "Model is loading" : query.isLoading ? "Checking saved endpoint" : "No model profile yet"}</span>
           {!connectionChanged && <button className="text-button" onClick={() => query.refetch()}>Check again</button>}
         </div>
         {!(query.isLoading && !query.data) && <form className="settings-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
@@ -161,10 +205,15 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
           </label>
           {form.provider === "mlx" && availableMlxModels.length > 0 ? <div className="model-field">
             <label>
-              <span>Loaded MLX model</span>
-              <select value={form.model} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} required>
+              <span>Available MLX model</span>
+              <select value={selectedMlxModel} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} required>
                 {form.model && !availableMlxModels.includes(form.model) && <option value={form.model}>{form.model} · saved selection</option>}
-                {availableMlxModels.map((name) => <option value={name} key={name}>{name}</option>)}
+                {installedMlxModels.length > 0 && <optgroup label="Installed on this Mac">
+                  {installedMlxModels.map((entry) => <option value={entry.id} key={entry.id}>{entry.name}</option>)}
+                </optgroup>}
+                {(mlxModels.data?.models ?? []).some((name) => !installedMlxModels.some((entry) => entry.id === name)) && <optgroup label="From MLX endpoint">
+                  {(mlxModels.data?.models ?? []).filter((name) => !installedMlxModels.some((entry) => entry.id === name)).map((name) => <option value={name} key={name}>{name}</option>)}
+                </optgroup>}
               </select>
             </label>
           </div> : form.provider === "ollama" ? <div className="model-field">
@@ -211,7 +260,7 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
           </div> : <label>
             <span>Model identifier</span>
             <input value={form.model} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} spellCheck={false} required />
-            {form.provider === "mlx" && mlxModels.isError && <span className="field-help field-help--error">Could not reach the MLX server. Start it on your Mac, then check again.</span>}
+            {form.provider === "mlx" && mlxModels.isError && <span className="field-help field-help--error">Could not reach the MLX server.</span>}
             {form.provider === "mlx" && <button type="button" className="text-button model-refresh" disabled={mlxModels.isFetching} onClick={() => void mlxModels.refetch()}>{mlxModels.isFetching ? "Loading model…" : "Load model from endpoint"}</button>}
             {form.provider === "openai-compatible" && <>
               <button type="button" className="text-button model-refresh" disabled={compatibleModels.isFetching} onClick={() => void compatibleModels.refetch()}>{compatibleModels.isFetching ? "Loading models…" : "Load models from endpoint"}</button>
@@ -219,6 +268,14 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
             </>}
             {form.provider === "openai-compatible" && availableCompatibleModels.length > 0 && <button type="button" className="text-button model-refresh" onClick={() => setEditModelId(false)}>Choose from available models</button>}
           </label>}
+          {form.provider === "mlx" && mlxSupported && mlxUsesDefaultEndpoint && !mlxServerRunning && <div className="model-field">
+            <button type="button" className="quiet-button" style={{ justifySelf: "start" }} disabled={startMlx.isPending || !mlxRuntime.data?.launcher_available || !selectedMlxInstalled || mlxRuntime.data?.server_status === "starting"}
+              onClick={() => startMlx.mutate()}>{startMlx.isPending || mlxRuntime.data?.server_status === "starting" ? "Starting MLX…" : "Start and use MLX server"}</button>
+            {!mlxRuntime.data?.launcher_available && <span className="field-help">Start the Mac companion once with <code>make mlx-host</code> in the project folder.</span>}
+            {mlxRuntime.data?.launcher_available && installedMlxModels.length === 0 && <span className="field-help">No installed MLX models found in the Boundless model folder.</span>}
+            {mlxRuntime.data?.launcher_available && installedMlxModels.length > 0 && !selectedMlxInstalled && <span className="field-help">Choose an installed model above to start it.</span>}
+          </div>}
+          {form.provider === "mlx" && mlxSupported && !mlxUsesDefaultEndpoint && mlxModels.isError && <span className="field-help">The start button manages the default MLX endpoint. Start this custom endpoint separately.</span>}
           <div className="settings-grid">
             {isLocalModel && <label>
               <span>Context window</span>
@@ -246,7 +303,7 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
           </div>
           <footer className="dialog-actions">
             <button type="button" className="quiet-button" onClick={closeDialog}>Close</button>
-            <button type="submit" className="primary-button" disabled={save.isPending || !form.model.trim() || (form.provider === "mlx" && capabilities.isSuccess && !mlxSupported)}>
+            <button type="submit" className="primary-button" disabled={save.isPending || !(form.provider === "mlx" ? selectedMlxModel : form.model).trim() || (form.provider === "mlx" && capabilities.isSuccess && !mlxSupported)}>
               {save.isPending ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}
               <span>{save.isPending ? "Saving" : "Save profile"}</span>
             </button>

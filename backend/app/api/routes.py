@@ -4,6 +4,7 @@ import re
 from datetime import UTC, datetime
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -41,6 +42,7 @@ from app.schemas import (
     CampaignCreate,
     CampaignRename,
     DeepSeekModelsRequest,
+    MLXStartRequest,
     ModelSettingsUpdate,
     RewindRequest,
     TurnCreate,
@@ -52,6 +54,7 @@ from app.services.canon_guard import check_narrative
 from app.services.context_builder import history_for_branch
 from app.services.export_service import export_campaign, import_campaign
 from app.services.meta_commands import apply_meta_command
+from app.services.narration import clean_history_narration
 from app.services.state_service import apply_interpretation, capture_snapshot, restore_snapshot
 from app.services.summary_service import update_campaign_summary
 from app.services.timeline import fork_branch, rewind_branch
@@ -98,6 +101,9 @@ def _model_status(profile: ModelProfile | None) -> dict:
 
 async def _detail(session: AsyncSession, campaign: Campaign, branch: Branch) -> dict:
     turns = await history_for_branch(session, branch.head_turn_id, limit=180)
+    visible_turns = jsonable_encoder(turns)
+    for turn in visible_turns:
+        turn["gm_response"] = clean_history_narration(turn.get("gm_response") or "")
     characters = list((await session.scalars(select(Character).where(
         Character.branch_id == branch.id, Character.visibility != "GM_ONLY").order_by(Character.name))).all())
     locations = list((await session.scalars(select(Location).where(
@@ -134,7 +140,7 @@ async def _detail(session: AsyncSession, campaign: Campaign, branch: Branch) -> 
         "protagonist_name": campaign.protagonist_name, "genre": campaign.genre,
         "archived": campaign.archived, "created_at": campaign.created_at, "updated_at": campaign.updated_at,
         "active_branch_id": campaign.active_branch_id, "branch": branch,
-        "branches": branches, "turns": turns, "current_state": branch.current_state,
+        "branches": branches, "turns": visible_turns, "current_state": branch.current_state,
         "current_location": current_location, "characters": characters, "locations": locations,
         "factions": factions, "inventory": [row for row in items if row.owner_name.casefold() in {campaign.protagonist_name.casefold(), "player"}],
         "items": items, "relationships": relationship_data, "objectives": objectives,
@@ -172,6 +178,46 @@ async def health(session: AsyncSession = Depends(get_session)):
 @router.get("/system/capabilities")
 async def system_capabilities():
     return {"mlx_supported": _mlx_supported(), "mlx_default_base_url": mlx_base_url()}
+
+
+@router.get("/settings/mlx/runtime")
+async def mlx_runtime():
+    if not _mlx_supported():
+        raise HTTPException(422, "MLX requires Apple Silicon running macOS.")
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(f"{settings.mlx_launcher_base_url}/status")
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("service") != "boundless-mlx-host":
+                raise ValueError("Unexpected host service")
+            return {"launcher_available": True, **payload}
+    except (httpx.HTTPError, ValueError):
+        return {"launcher_available": False, "server_status": "unknown", "models": [],
+                "detail": "The Mac launcher is offline. Run make mlx-host from the project folder."}
+
+
+@router.post("/settings/mlx/start")
+async def start_mlx(payload: MLXStartRequest):
+    if not _mlx_supported():
+        raise HTTPException(422, "MLX requires Apple Silicon running macOS.")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            status = await client.get(f"{settings.mlx_launcher_base_url}/status")
+            status.raise_for_status()
+            if status.json().get("service") != "boundless-mlx-host":
+                raise ValueError("Unexpected host service")
+            response = await client.post(
+                f"{settings.mlx_launcher_base_url}/start",
+                json={"model": payload.model},
+                headers={"X-Boundless-Launcher": "start"},
+            )
+        if response.is_error:
+            detail = response.json().get("detail", "Could not start MLX.")
+            raise HTTPException(response.status_code, detail)
+        return response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(503, "The Mac launcher is offline. Run make mlx-host from the project folder.") from exc
 
 
 @router.get("/settings/ollama/models")

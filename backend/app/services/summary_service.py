@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Campaign, CampaignSummary
 from app.llm.base import LLMProvider
 from app.services.context_builder import history_for_branch
+from app.services.narration import clean_history_narration
 from app.services.turn_service import parse_json_response
 
 
@@ -16,7 +17,7 @@ async def update_campaign_summary(session: AsyncSession, provider: LLMProvider, 
     if existing and existing.through_turn_index >= turn_index:
         return
     recent = await history_for_branch(session, head_turn_id, limit=8)
-    transcript = "\n".join(f"Player: {turn.player_action}\nGM: {turn.gm_response}" for turn in recent)
+    transcript = "\n".join(f"Player: {turn.player_action}\nGM: {clean_history_narration(turn.gm_response)}" for turn in recent)
     prior = existing.content if existing else ""
     prompt = "Update the concise, factual campaign summary with these new turns. Keep established hard canon verbatim. Return JSON {\"summary\":\"...\"}. Do not include hidden secrets unless the summary is marked GM-only."
     raw = await provider.complete_json([

@@ -50,6 +50,10 @@ class DeepSeekModelsRequest(BaseModel):
     api_key: str | None = Field(default=None, max_length=1024, exclude=True, repr=False)
 
 
+class MLXStartRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=240)
+
+
 class ModelSettingsUpdate(BaseModel):
     provider: Literal["mlx", "openai-compatible", "ollama", "deepseek"]
     base_url: str = Field(min_length=8, max_length=400)
