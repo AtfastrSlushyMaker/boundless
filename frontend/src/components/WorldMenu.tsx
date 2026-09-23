@@ -9,11 +9,18 @@ type Props = { campaign: CampaignCard; onRename: (campaign: CampaignCard) => voi
 export function WorldMenu({ campaign, onRename, onArchive, onDuplicate, onDelete, onError }: Props) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    const close = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
+    if (!open) return;
+    root.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setOpen(false); trigger.current?.focus(); }
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", onKey); };
+  }, [open]);
   const runExport = async () => {
     setOpen(false);
     try { await exportCampaign(campaign.id, campaign.title); }
@@ -21,14 +28,21 @@ export function WorldMenu({ campaign, onRename, onArchive, onDuplicate, onDelete
   };
   return (
     <div className="world-menu" ref={root}>
-      <button className="icon-button menu-trigger" aria-label={`Actions for ${campaign.title}`} aria-expanded={open} onClick={() => setOpen(!open)}><MoreHorizontal size={19} /></button>
-      {open && <div className="menu-popover" role="menu">
-        <button role="menuitem" onClick={() => { setOpen(false); onRename(campaign); }}><Pencil size={15} />Rename</button>
-        <button role="menuitem" onClick={() => { setOpen(false); onDuplicate(campaign); }}><Copy size={15} />Duplicate</button>
-        <button role="menuitem" onClick={runExport}><Download size={15} />Export</button>
-        <button role="menuitem" onClick={() => { setOpen(false); onArchive(campaign); }}>{campaign.archived ? <Undo2 size={15} /> : <Archive size={15} />}{campaign.archived ? "Restore" : "Archive"}</button>
+      <button ref={trigger} type="button" className="icon-button menu-trigger" aria-label={`Actions for ${campaign.title}`} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(!open)}><MoreHorizontal size={19} /></button>
+      {open && <div className="menu-popover" role="menu" aria-label={`Actions for ${campaign.title}`} onKeyDown={(event) => {
+        const options = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'));
+        const index = options.indexOf(document.activeElement as HTMLButtonElement);
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          options[(index + (event.key === "ArrowDown" ? 1 : options.length - 1)) % options.length]?.focus();
+        }
+      }}>
+        <button type="button" role="menuitem" onClick={() => { setOpen(false); onRename(campaign); }}><Pencil size={15} />Rename</button>
+        <button type="button" role="menuitem" onClick={() => { setOpen(false); onDuplicate(campaign); }}><Copy size={15} />Duplicate</button>
+        <button type="button" role="menuitem" onClick={runExport}><Download size={15} />Export</button>
+        <button type="button" role="menuitem" onClick={() => { setOpen(false); onArchive(campaign); }}>{campaign.archived ? <Undo2 size={15} /> : <Archive size={15} />}{campaign.archived ? "Restore" : "Archive"}</button>
         <div className="menu-separator" />
-        <button className="menu-danger" role="menuitem" onClick={() => { setOpen(false); onDelete(campaign); }}><Trash2 size={15} />Delete</button>
+        <button type="button" className="menu-danger" role="menuitem" onClick={() => { setOpen(false); onDelete(campaign); }}><Trash2 size={15} />Delete</button>
       </div>}
     </div>
   );

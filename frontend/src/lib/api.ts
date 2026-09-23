@@ -55,10 +55,23 @@ export type Branch = {
   current_state: Record<string, unknown>;
 };
 
-export type Character = { id: string; name: string; role: string; status: string; personality: string; attributes: Record<string, unknown> };
+export type Character = { id: string; name: string; role: string; status: string; personality: string; motivations: string[]; knowledge: Array<{ fact: string; certainty?: string }>; attributes: Record<string, unknown> };
 export type Location = { id: string; name: string; region: string; description: string };
 export type Item = { id: string; name: string; quantity: number; condition: string; significance: string };
-export type Relationship = { id: string; to: string; summary: string; dimensions: Record<string, string | number> };
+export type RelationshipHistoryEntry = { reason: string; turn_index?: number; turn_id?: string; location?: string };
+export type RelationshipLastInteraction = { turn_index?: number; turn_id?: string; location?: string };
+export type Relationship = {
+  id: string;
+  from: string;
+  to: string;
+  summary: string;
+  dimensions: Record<string, unknown> & {
+    trust?: number; respect?: number; fear?: number; hostility?: number;
+    kinship?: string; awareness?: string;
+    history?: RelationshipHistoryEntry[];
+    last_interaction?: RelationshipLastInteraction;
+  };
+};
 export type EventRecord = { id: string; content: string; certainty: string };
 export type CanonRule = { id: string; statement: string };
 export type Secret = { id: string; name: string; content: string };
@@ -104,6 +117,32 @@ export type ModelSettings = {
   api_key_configured?: boolean;
 };
 
+export type ImageSettings = {
+  provider: "none" | "comfyui" | "ai_horde" | "perchance_assisted";
+  enabled: boolean;
+  base_url: string;
+  checkpoint: string;
+  workflow: "boundless_portrait_v1";
+  width: number;
+  height: number;
+  steps: number;
+  cfg: number;
+  sampler: string;
+  scheduler: string;
+  auto_recurring: boolean;
+  auto_major: boolean;
+  auto_companion: boolean;
+  auto_minor: boolean;
+};
+
+export type ImageConnection = { status: "connected" | "offline"; detail?: string; device?: string; models: string[]; queue_running?: number; queue_pending?: number };
+
+export function portraitUrl(value: unknown): string {
+  if (typeof value !== "string") return "";
+  if (value.startsWith("/api/portraits/")) return `${API_URL}${value}`;
+  return value.startsWith("https://") ? value : "";
+}
+
 export type SystemCapabilities = { mlx_supported: boolean; mlx_default_base_url: string };
 export type MlxRuntime = {
   launcher_available: boolean;
@@ -146,6 +185,27 @@ export const api = {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ theme_family: themeFamily }),
   }),
   refreshSetup: (id: string, branchId: string) => request<CampaignDetail>(`/api/campaigns/${id}/refresh-setup?branch_id=${branchId}`, { method: "POST" }),
+  reindexPeople: (id: string, branchId: string) => request<CampaignDetail>(`/api/campaigns/${id}/reindex-people?branch_id=${branchId}`, { method: "POST" }),
+  generateAvatar: (campaignId: string, branchId: string, characterId: string, newSeed = false) =>
+    request<{ done: boolean; job_id: string; status: string }>(`/api/campaigns/${campaignId}/characters/${characterId}/avatar?branch_id=${branchId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ new_seed: newSeed }) }),
+  avatarStatus: (campaignId: string, branchId: string, characterId: string) =>
+    request<{ done: boolean; job_id: string; status: string; error?: string; avatar_url?: string }>(`/api/campaigns/${campaignId}/characters/${characterId}/avatar?branch_id=${branchId}`),
+  removeAvatar: (campaignId: string, branchId: string, characterId: string) =>
+    request<{ removed: boolean }>(`/api/campaigns/${campaignId}/characters/${characterId}/avatar?branch_id=${branchId}`, { method: "DELETE" }),
+  uploadAvatar: (campaignId: string, branchId: string, characterId: string, image: File) => {
+    const body = new FormData(); body.append("image", image);
+    return request<{ done: boolean; avatar_url: string }>(`/api/campaigns/${campaignId}/characters/${characterId}/avatar/upload?branch_id=${branchId}`, { method: "POST", body });
+  },
+  updateCharacter: (campaignId: string, branchId: string, characterId: string, payload: {
+    role: string; personality: string; appearance: string; sex: string; gender: string; pronouns: string;
+  }) => request<CampaignDetail>(`/api/campaigns/${campaignId}/characters/${characterId}?branch_id=${branchId}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
+  updateRelationship: (campaignId: string, branchId: string, relationshipId: string, payload: {
+    trust: number | null; respect: number | null; fear: number | null; hostility: number | null; status: string; summary: string;
+  }) => request<CampaignDetail>(`/api/campaigns/${campaignId}/relationships/${relationshipId}?branch_id=${branchId}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }),
   enhanceWorld: (prompt: string, direction: string) => request<{ prompt: string }>("/api/campaigns/enhance", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, direction }) }),
   renameCampaign: (id: string, title: string) => request(`/api/campaigns/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }) }),
   archiveCampaign: (id: string, archived: boolean) => request(`/api/campaigns/${id}/archive?archived=${archived}`, { method: "POST" }),
@@ -156,6 +216,9 @@ export const api = {
   rewind: (id: string, branchId: string, turnId: string) => request<CampaignDetail>(`/api/campaigns/${id}/rewind?branch_id=${branchId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turn_id: turnId }) }),
   editTurn: (turnId: string, content: string) => request<CampaignDetail>(`/api/turns/${turnId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }),
   settings: () => request<ModelSettings>("/api/settings/model"),
+  imageSettings: () => request<ImageSettings>("/api/settings/images"),
+  saveImageSettings: (settings: ImageSettings) => request<ImageSettings>("/api/settings/images", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) }),
+  testImageConnection: (baseUrl: string) => request<ImageConnection>(`/api/settings/images/test?base_url=${encodeURIComponent(baseUrl)}`),
   mlxRuntime: () => request<MlxRuntime>("/api/settings/mlx/runtime"),
   startMlx: (model: string) => request<{ server_status: string; detail: string }>("/api/settings/mlx/start", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }),

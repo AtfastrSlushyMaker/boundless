@@ -5,6 +5,7 @@ import { Activity, CircleX, LoaderCircle, Save, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import { api, ModelSettings } from "@/lib/api";
+import { ImageSettingsPanel } from "@/components/ImageSettingsPanel";
 
 type Props = { open: boolean; onClose: () => void };
 
@@ -48,6 +49,7 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
   const query = useQuery({ queryKey: ["model-settings"], queryFn: api.settings, enabled: open });
   const capabilities = useQuery({ queryKey: ["system-capabilities"], queryFn: api.capabilities, enabled: open, staleTime: 300_000 });
   const [draft, setDraft] = useState<ModelSettings | null>(null);
+  const [section, setSection] = useState<"model" | "portraits">("model");
   const [editModelId, setEditModelId] = useState(false);
   const [compatibleEndpoint, setCompatibleEndpoint] = useState("");
   const [deepseekApiKey, setDeepseekApiKey] = useState("");
@@ -170,10 +172,12 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
         transition={{ duration: reduceMotion ? 0 : 0.2, ease: "easeOut" }}>
         <header className="dialog-head">
           <div>
-            <h2 id="settings-title">Model settings</h2>
+            <h2 id="settings-title">Settings</h2>
           </div>
           <button className="icon-button" aria-label="Close model settings" onClick={closeDialog}><X size={18} /></button>
         </header>
+        <nav className="settings-section-nav" aria-label="Settings section"><button type="button" aria-current={section === "model" ? "page" : undefined} onClick={() => setSection("model")}>Story model</button><button type="button" aria-current={section === "portraits" ? "page" : undefined} onClick={() => setSection("portraits")}>Portrait generation</button></nav>
+        {section === "portraits" ? <ImageSettingsPanel /> : <>
         <div className="model-health-line">
           {query.isLoading ? <LoaderCircle className="spin" size={16} /> : connectionChanged ? <CircleX size={16} /> : query.data?.health?.status === "connected" ? <Activity size={16} /> : <CircleX size={16} />}
           <span>{connectionChanged ? "Unsaved model selection" : query.data?.health?.status === "connected" ? `Connected · ${modelDisplayLabel(query.data.provider, query.data.model)}` : query.data?.health?.status === "offline" ? "Model server is offline" : query.data?.health?.status === "loading" ? "Model is loading" : query.isLoading ? "Checking saved endpoint" : "No model profile yet"}</span>
@@ -308,7 +312,7 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
               <span>{save.isPending ? "Saving" : "Save profile"}</span>
             </button>
           </footer>
-        </form>}
+        </form>}</>}
       </motion.section>
     </motion.div>}
     </AnimatePresence>

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -14,10 +15,11 @@ import {
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AtlasArtwork } from "@/components/AtlasArtwork";
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
-import { api, CampaignDetail, GameMode, StreamEvent, ThemeFamily, streamTurn } from "@/lib/api";
+import { PeoplePanel } from "@/components/PeoplePanel";
+import { api, CampaignDetail, GameMode, StreamEvent, ThemeFamily, portraitUrl, streamTurn } from "@/lib/api";
 
 const OPENING_ACTION = "Open on the campaign's stated starting moment.";
-type LorePanel = "character" | "people" | "inventory" | "rules" | "journal";
+type LorePanel = "character" | "people" | "inventory" | "world" | "rules" | "journal";
 type RetryRequest = { action: string; instruction?: string; targetTurnId?: string };
 
 function Markdown({ content }: { content: string }) {
@@ -113,51 +115,71 @@ function MemoryActionMenu({ campaign, turnId, branchId, content, onChanged, onEr
   </>;
 }
 
-function SidebarContent({ panel, campaign, onRefreshSetup, refreshingSetup, refreshedSetup }: {
+function SidebarContent({ panel, campaign, onRefreshSetup, refreshingSetup, refreshedSetup,
+                          onReindexPeople, reindexingPeople, reindexedPeople, onRefresh }: {
   panel: LorePanel; campaign: CampaignDetail; onRefreshSetup: () => void; refreshingSetup: boolean; refreshedSetup: boolean;
+  onReindexPeople: () => void; reindexingPeople: boolean; reindexedPeople: boolean;
+  onRefresh: () => void;
 }) {
+  const [characterTab, setCharacterTab] = useState<"overview" | "traits" | "history" | "goals">("overview");
+  const [inventorySearch, setInventorySearch] = useState("");
+  const [journalTab, setJournalTab] = useState<"events" | "memories" | "secrets">("events");
   if (panel === "character") {
     const constitution = campaign.constitution;
-    const abilities = [...((constitution.abilities as string[] | undefined) ?? []), ...((constitution.powers as string[] | undefined) ?? [])].filter((value, index, all) => all.indexOf(value) === index).slice(0, 8);
+    const abilities = [...((constitution.abilities as string[] | undefined) ?? []), ...((constitution.powers as string[] | undefined) ?? [])].filter((value, index, all) => all.indexOf(value) === index);
     const protagonist = campaign.characters.find((person) => person.name === campaign.protagonist_name);
     const identity = (protagonist?.attributes ?? ((constitution.starting_state as Record<string, unknown> | undefined)?.identity as Record<string, unknown> | undefined) ?? {});
     const money = (campaign.current_state.money ?? protagonist?.attributes?.money) as { amount?: number; currency?: string } | undefined;
     const identityDetails = ([ ["Sex", identity.sex], ["Gender", identity.gender], ["Pronouns", identity.pronouns] ] as const)
       .filter(([, value]) => typeof value === "string").map(([label, value]) => `${label}: ${value}`);
-    return <div className="lore-content">
+    const portrait = portraitUrl(protagonist?.attributes?.avatar_url);
+    const lists = { traits: constitution.traits as string[] | undefined, history: constitution.history as string[] | undefined,
+      goals: constitution.preferences as string[] | undefined };
+    return <div className="lore-content character-sheet">
       <p className="lore-label">YOUR CHARACTER</p>
-      <h2 className="lore-name">{campaign.protagonist_name}</h2>
-      <p className="lore-copy">{identityDetails.join(" · ") || "Identity open"}{String(campaign.current_state.player_status ?? "alive") !== "alive" && <span> · {String(campaign.current_state.player_status)}</span>}</p>
-      {money && typeof money.amount === "number" && <p className="lore-copy">Money: {money.amount.toLocaleString()} {money.currency ?? ""}</p>}
-      {!!(constitution.traits as string[] | undefined)?.length && <section className="lore-group"><h3>Traits</h3><ul className="plain-list">{(constitution.traits as string[]).slice(0, 8).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
-      {!!(constitution.history as string[] | undefined)?.length && <section className="lore-group"><h3>History</h3><ul className="plain-list">{(constitution.history as string[]).slice(0, 8).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
-      {!!(constitution.preferences as string[] | undefined)?.length && <section className="lore-group"><h3>Goals</h3><ul className="plain-list">{(constitution.preferences as string[]).slice(0, 5).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
-      {!!abilities.length && <section className="lore-group"><h3>Established abilities</h3><ul className="plain-list">{abilities.map((item: string, index: number) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
-      {!!(constitution.limitations as string[] | undefined)?.length && <section className="lore-group"><h3>Limitations</h3><ul className="plain-list">{(constitution.limitations as string[]).slice(0, 8).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
+      <div className="character-sheet-head"><div className="character-sheet-portrait">{portrait ? <Image src={portrait} alt="" width={72} height={72} unoptimized /> : <span>{campaign.protagonist_name.charAt(0)}</span>}</div><div><h2 className="lore-name">{campaign.protagonist_name}</h2><p>{protagonist?.role || "Player character"}</p></div></div>
+      <nav className="sheet-tabs" aria-label="Character details">{(["overview", "traits", "history", "goals"] as const).map((tab) => <button type="button" key={tab} aria-current={characterTab === tab ? "page" : undefined} onClick={() => setCharacterTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
+      {characterTab === "overview" && <>
+        <dl className="character-facts">{identityDetails.map((entry) => { const [label, value] = entry.split(": "); return <div key={label}><dt>{label}</dt><dd>{value}</dd></div>; })}
+          {money && typeof money.amount === "number" && <div><dt>Money</dt><dd>{money.amount.toLocaleString()} {money.currency ?? ""}</dd></div>}
+          <div><dt>Status</dt><dd>{String(campaign.current_state.player_status ?? "alive")}</dd></div></dl>
+        {protagonist?.personality && <section className="lore-group"><h3>Personality</h3><p className="lore-copy">{protagonist.personality}</p></section>}
+        {!!abilities.length && <section className="lore-group"><h3>Established abilities</h3><ul className="plain-list">{abilities.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
+        {!!(constitution.limitations as string[] | undefined)?.length && <section className="lore-group"><h3>Limitations</h3><ul className="plain-list">{(constitution.limitations as string[]).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
+      </>}
+      {characterTab !== "overview" && <section className="lore-group"><h3>{characterTab[0].toUpperCase() + characterTab.slice(1)}</h3>{lists[characterTab]?.length ? <ul className="plain-list">{lists[characterTab].map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p className="lore-copy">Nothing recorded yet.</p>}</section>}
       <button type="button" className="text-button" onClick={onRefreshSetup} disabled={refreshingSetup}>{refreshingSetup ? "Reading premise…" : refreshedSetup ? "Details refreshed · run again" : "Refresh details from premise"}</button>
-      <section className="lore-group"><h3>World rules</h3>{campaign.canon_rules.length ? <ul className="plain-list">{campaign.canon_rules.map((rule, index) => <li key={`${rule.id ?? index}`}>{String(rule.statement)}</li>)}</ul> : <p className="lore-copy">No additional hard rules recorded.</p>}</section>
     </div>;
   }
-  if (panel === "people") return <div className="lore-content"><p className="lore-label">THE PEOPLE</p><h2 className="lore-name">Known faces</h2>
-    {campaign.characters.filter((person) => person.name !== campaign.protagonist_name).length === 0 && <p className="lore-copy">No one has entered the record yet.</p>}
-    <ul className="entity-list">{campaign.characters.filter((person) => person.name !== campaign.protagonist_name).map((person) => <li key={person.id}><strong>{person.name}</strong><span>{person.role || person.status}</span>{person.personality && <p>{person.personality}</p>}</li>)}</ul>
-    {!!campaign.relationships.length && <section className="lore-group"><h3>Between you</h3><ul className="entity-list">{campaign.relationships.map((relation, index) => <li key={relation.id ?? index}><strong>{relation.to}</strong><span>{relation.summary || Object.entries(relation.dimensions ?? {}).map(([key, value]) => `${key}: ${value}`).join(" · ")}</span></li>)}</ul></section>}
-  </div>;
-  if (panel === "inventory") return <div className="lore-content"><p className="lore-label">ON YOUR PERSON</p><h2 className="lore-name">Inventory</h2>
-    {campaign.inventory.length === 0 && <p className="lore-copy">Nothing has been recorded in your inventory.</p>}
-    <ul className="entity-list">{campaign.inventory.map((item) => <li key={item.id}><strong>{item.name}{item.quantity > 1 ? ` · ${item.quantity}` : ""}</strong><span>{item.condition}{item.significance ? ` · ${item.significance}` : ""}</span></li>)}</ul>
-    <section className="lore-group"><h3>Known places</h3>{campaign.locations.length ? <ul className="plain-list">{campaign.locations.map((place) => <li key={place.id}><strong>{place.name}</strong>{place.region && ` · ${place.region}`}</li>)}</ul> : <p className="lore-copy">No locations recorded yet.</p>}</section>
+  if (panel === "people") return <PeoplePanel campaign={campaign} onReindex={onReindexPeople}
+    rebuilding={reindexingPeople} rebuilt={reindexedPeople} onRefresh={onRefresh} />;
+  if (panel === "inventory") {
+    const items = campaign.inventory.filter((item) => `${item.name} ${item.significance} ${item.condition}`.toLowerCase().includes(inventorySearch.toLowerCase()));
+    return <div className="lore-content inventory-sheet"><p className="lore-label">ON YOUR PERSON</p><h2 className="lore-name">Inventory</h2>
+      <p className="lore-copy">{campaign.inventory.length} recorded {campaign.inventory.length === 1 ? "item" : "items"}</p>
+      <input type="search" aria-label="Search inventory" placeholder="Search your belongings" value={inventorySearch} onChange={(event) => setInventorySearch(event.target.value)} />
+      {items.length === 0 && <p className="lore-copy">{campaign.inventory.length ? "No items match that search." : "Nothing has been recorded in your inventory."}</p>}
+      <ul className="inventory-tiles">{items.map((item) => <li key={item.id}><span className="inventory-object" aria-hidden="true">{item.name.charAt(0).toUpperCase()}</span><strong>{item.name}</strong><span>{item.quantity > 1 ? `${item.quantity} held · ` : ""}{item.condition || "Condition unknown"}</span>{item.significance && <p>{item.significance}</p>}</li>)}</ul>
+    </div>;
+  }
+  if (panel === "world") return <div className="lore-content world-sheet"><p className="lore-label">THE KNOWN WORLD</p><h2 className="lore-name">Places</h2>
+    <div className="world-sheet-map"><AtlasArtwork compact /><span>{campaign.current_location || "Where the story stands"}</span></div>
+    <p className="lore-copy">{campaign.locations.length} known {campaign.locations.length === 1 ? "place" : "places"}. The map is atmospheric; only recorded locations are listed below.</p>
+    <ul className="world-place-list">{campaign.locations.map((place) => <li key={place.id}><strong>{place.name}</strong>{place.region && <span>{place.region}</span>}{place.description && <p>{place.description}</p>}</li>)}</ul>
+    {!campaign.locations.length && <p className="lore-copy">Places will appear as you discover them.</p>}
   </div>;
   if (panel === "rules") return <div className="lore-content"><p className="lore-label">WORLD CONSTITUTION</p><h2 className="lore-name">Rules that hold</h2>
     <p className="lore-copy">These come from your original premise and explicit canon changes.</p>
     <ul className="rule-list">{campaign.canon_rules.map((rule, index) => <li key={rule.id ?? index}><Shield size={15} /><span>{rule.statement}</span></li>)}</ul>
     <details className="prompt-record"><summary>Original premise</summary><p>{campaign.original_prompt}</p></details>
   </div>;
-  return <div className="lore-content"><p className="lore-label">CAMPAIGN RECORD</p><h2 className="lore-name">Journal</h2>
+  return <div className="lore-content journal-sheet"><p className="lore-label">CAMPAIGN RECORD</p><h2 className="lore-name">Journal</h2>
     {campaign.summary && <section className="summary-note"><h3>What has happened</h3><p>{campaign.summary}</p></section>}
+    <nav className="sheet-tabs" aria-label="Journal entries">{(["events", "memories", "secrets"] as const).map((tab) => <button type="button" key={tab} aria-current={journalTab === tab ? "page" : undefined} onClick={() => setJournalTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
     {campaign.events.length === 0 && campaign.memories.length === 0 && !campaign.summary && <p className="lore-copy">Important events will gather here as the story unfolds.</p>}
-    <ul className="journal-list">{campaign.events.slice(0, 14).map((event, index) => <li key={event.id ?? index}><span>{event.certainty ?? "RECORDED"}</span><p>{event.content}</p></li>)}</ul>
-    {!!campaign.known_secrets.length && <section className="lore-group"><h3>Discovered secrets</h3><ul className="plain-list">{campaign.known_secrets.map((secret) => <li key={secret.id}>{secret.name}: {secret.content}</li>)}</ul></section>}
+    {journalTab === "events" && <ul className="journal-list">{campaign.events.map((event, index) => <li key={event.id ?? index}><span>{event.certainty ?? "RECORDED"}</span><p>{event.content}</p></li>)}</ul>}
+    {journalTab === "memories" && <ul className="journal-list">{campaign.memories.map((memory, index) => <li key={String(memory.id ?? index)}><span>{String(memory.memory_type ?? "MEMORY")}</span><p>{String(memory.content ?? "")}</p></li>)}</ul>}
+    {journalTab === "secrets" && <ul className="journal-list">{campaign.known_secrets.map((secret) => <li key={secret.id}><span>{secret.name}</span><p>{secret.content}</p></li>)}</ul>}
   </div>;
 }
 
@@ -223,6 +245,17 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
     onSuccess: (detail) => {
       cache.setQueryData(["campaign", campaignId, requestedBranchId], detail);
       void cache.invalidateQueries({ queryKey: ["campaigns"] });
+      setNotice("");
+    },
+    onError: (error) => setNotice(error.message),
+  });
+  const reindexPeople = useMutation({
+    mutationFn: () => {
+      if (!branchId) throw new Error("Open a campaign before recovering people.");
+      return api.reindexPeople(campaignId, branchId);
+    },
+    onSuccess: (detail) => {
+      cache.setQueryData(["campaign", campaignId, requestedBranchId], detail);
       setNotice("");
     },
     onError: (error) => setNotice(error.message),
@@ -341,7 +374,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
 
   const nav = useMemo(() => [
     ["character", "Character", Users], ["people", "People", MessageSquareText],
-    ["inventory", "Inventory", Backpack], ["rules", "World rules", Shield], ["journal", "Journal", ScrollText],
+    ["inventory", "Inventory", Backpack], ["world", "World", Map], ["rules", "World rules", Shield], ["journal", "Journal", ScrollText],
   ] as const, []);
 
   if (campaignQuery.isLoading) return <main className="game-loading"><span className="brand-glyph">B</span><p>Opening the archive…</p></main>;
@@ -383,7 +416,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
           <nav className="lore-nav" aria-label="Campaign information">
             {nav.map(([id, label, Icon]) => <button key={id} className={panel === id ? "lore-nav-item lore-nav-item--active" : "lore-nav-item"} onClick={() => { setPanel(id); setMobileNavOpen(false); }} aria-current={panel === id ? "page" : undefined}><Icon size={16} /><span>{label}</span>{panel === id && <motion.span layoutId="lore-cursor" className="lore-cursor" aria-hidden="true" transition={{ type: "spring", stiffness: 380, damping: 34 }} />}</button>)}
           </nav>
-          <div className="rail-content"><SidebarContent panel={panel} campaign={campaign} onRefreshSetup={() => refreshSetup.mutate()} refreshingSetup={refreshSetup.isPending} refreshedSetup={refreshSetup.isSuccess} /></div>
+          <div className="rail-content"><SidebarContent panel={panel} campaign={campaign} onRefreshSetup={() => refreshSetup.mutate()} refreshingSetup={refreshSetup.isPending} refreshedSetup={refreshSetup.isSuccess} onReindexPeople={() => reindexPeople.mutate()} reindexingPeople={reindexPeople.isPending} reindexedPeople={reindexPeople.isSuccess} onRefresh={refetchCampaign} /></div>
           <footer className="rail-footer"><Clock3 size={13} /><span>{String(campaign.current_state.world_time ?? "Time unmarked")}</span></footer>
         </aside>
         {mobileNavOpen && <button className="rail-scrim" aria-label="Close campaign notes" onClick={() => setMobileNavOpen(false)} />}

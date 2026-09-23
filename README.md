@@ -19,6 +19,10 @@ At world creation, **How do you want to play?** offers **Write every action** an
 
 The world record keeps a compact memory of each completed turn even when a local model emits no structured facts. Characters, locations, and possessions are updated from supported state changes, while the narrator is instructed to react to each action and move the scene forward. Explicit player corrections about their own identity take precedence over the narrator's assumptions.
 
+The **People** panel shows known roles, identity details, motives, and established family links. **View connections** opens a scrollable, zoomable graph of every visible person and recorded relationship. You can correct a character's role, appearance, identity, and personality or the four relationship scores and status while the story continues. **Recover people from story** scans earlier turns for explicitly named or individually encountered people when a local model omitted them. Parent names are linked automatically when the premise or narration states them; the app leaves an unstated relative's name unknown. Before a new turn is shown, Boundless checks for obvious unchosen player actions and deaths that skip the player's chance to respond to lethal danger.
+
+**Portrait generation** is optional. Settings offers a ComfyUI server, [AI Horde's community API](https://github.com/Haidra-Org/AI-Horde/blob/main/README_integration.md), Perchance Assisted, or no provider. ComfyUI and AI Horde jobs run after story persistence in a durable queue. Boundless stores resulting images in its own portrait volume. You can also upload a saved image to any character. Perchance Assisted opens the [Perchance image generator](https://perchance.org/ai-text-to-image-generator) for manual creation and upload. The [Perchance API tutorial](https://perchance.org/api-tutorial) describes a text-list example endpoint, not an image API; its sample URL currently returns `Cannot GET`, so automatic image generation does not depend on it.
+
 ## Quick start with Docker Compose
 
 This starts PostgreSQL, runs database migrations, and builds the API and web images. Docker Engine with Compose is required. On Apple Silicon Macs, the MLX start button also needs Python 3.11+ and the installed `mlx_lm.server` command. The images do not contain a language model.
@@ -40,7 +44,25 @@ docker compose down
 
 `make stack-up` runs Compose and, on Apple Silicon Macs, starts a small host companion so the app can launch MLX on demand. If you run `docker compose up -d --build --wait` directly, start the companion separately with `make mlx-host` and set `HOST_MLX_SUPPORTED=true` in `.env`. `make stack-logs` and `make stack-down` manage the containers. `make db-up` starts only PostgreSQL for native development.
 
-`docker compose down` keeps the PostgreSQL and API secret volumes. `docker compose down -v` deletes both volumes and their data. The API, web app, and database publish only to `127.0.0.1` on the host.
+`docker compose down` keeps the PostgreSQL, API secret, and portrait volumes. `docker compose down -v` deletes all three volumes and their data. The API, web app, and database publish only to `127.0.0.1` on the host.
+
+## Optional portrait server
+
+Boundless on the Mac can use its MLX model for text while a Windows desktop runs ComfyUI for portraits. FastAPI communicates with ComfyUI over a Tailscale or trusted LAN URL. The endpoint is saved in **Settings → Portrait generation**; it is not built into the source code. **Test connection** runs from FastAPI, so it checks the path the backend actually uses, including when FastAPI runs in Docker.
+
+```text
+MacBook: Next.js + FastAPI + PostgreSQL + MLX text
+                        │
+                 Tailscale or LAN
+                        │
+Windows desktop: ComfyUI + NVIDIA GPU, port 8188
+```
+
+The Windows machine inspected for this setup already has the official ComfyUI checkout at `C:\Users\malek\ComfyUI`, a CUDA-enabled virtual environment, and the `juggernautXL_Ragnarok.safetensors` checkpoint (about 6.62 GB). It does not need a second installation or checkpoint download. ComfyUI should listen on its Tailscale interface or a trusted LAN interface and have a firewall rule limited to that interface and trusted peers. Do not expose port 8188 to the public internet. This task did not start the service or change the Windows firewall; those remote changes need explicit approval after the automatic approval review blocked them.
+
+Once the server is running, select **ComfyUI**, enter its reachable URL, click **Test connection**, choose a checkpoint from the discovered list, then save. The default workflow is [boundless_portrait_v1.json](backend/app/workflows/boundless_portrait_v1.json): an SDXL checkpoint loader, positive and negative prompts, 768 × 1024 latent, KSampler, VAE decode, and SaveImage. Size, steps, guidance, sampler, and checkpoint are configurable. The positive prompt uses the character's structured visual identity, current appearance, role, faction, and campaign mood. It does not send a full transcript. Stable seeds keep regeneration consistent; **New seed** deliberately changes the seed.
+
+Generated images are copied into `data/portraits/{campaign_id}/{character_id}/{portrait_id}.{png,jpg,webp}` for native development, or the Docker `api_portraits` volume. The database stores provider, prompt, model, seed, parameters, status, and relative image path. Jobs can be queued, generating, complete, failed, or cancelled. Offline servers back off without blocking story turns. If you want to avoid sending character details to a cloud service, leave AI Horde disabled and do not use it as a fallback. Perchance Assisted is a manual save-and-upload flow.
 
 ## Model options
 
@@ -121,8 +143,8 @@ The web and API ports are bound to host loopback. Boundless currently has no acc
 
 1. Boundless stores the original world prompt and derives a Campaign Constitution. Explicit hard rules are kept separately from summaries.
 2. The context builder selects the current state, relevant lore and memories, summaries, and recent turns within a model budget.
-3. The selected provider generates narration. CanonGuard checks for conflicts with hard rules and asks for a repair when needed.
-4. A state interpretation pass writes validated changes to characters, items, relationships, events, and other campaign records, then creates a checkpoint.
+3. The selected provider generates narration. CanonGuard checks hard rules, player agency, and sudden player death before the turn is shown, and asks the model for a repair when needed.
+4. A state interpretation pass writes validated changes to characters, items, relationships, events, and other campaign records. A conservative people index fills explicit encounters that a local model missed, then the turn creates a checkpoint.
 5. Editing, regenerating, rewinding, and branching use checkpoints and response versions so each timeline has its own state.
 
 Hidden canon marked `GM_ONLY` is not shown in player lore panels. See [architecture](docs/architecture.md) for the components and data flow.
@@ -159,6 +181,6 @@ The integration tests use local PostgreSQL and remove campaigns they create. `ma
 
 ## Contributing and license
 
-The repository has a Next.js frontend, FastAPI backend, Alembic migrations, and a PostgreSQL 18 database with pgvector. Keep provider integrations in `backend/app/llm/`, campaign rules in `backend/app/services/`, and browser API calls in `frontend/src/lib/api.ts`. Run the relevant checks above and keep secrets, model weights, databases, and generated files out of Git. The root [.gitignore](.gitignore) and both `.dockerignore` files exclude local artifacts from commits and image build contexts.
+The repository has a Next.js frontend, FastAPI backend, Alembic migrations, and a PostgreSQL 18 database with pgvector. Keep provider integrations in `backend/app/llm/`, campaign rules in `backend/app/services/`, and browser API calls in `frontend/src/lib/api.ts`. Run the relevant checks above and keep secrets, model weights, databases, and generated runtime files out of Git. The root [.gitignore](.gitignore) and both `.dockerignore` files exclude local artifacts from commits and image build contexts.
 
 A license has not yet been selected or added to this repository. Choose one before treating the source as an open-source release.

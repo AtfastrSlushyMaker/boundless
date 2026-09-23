@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
 import { ArrowDownLeft, ArrowUpRight, BookOpenText, Check, CircleAlert, Command, Import, LoaderCircle, Settings2, WifiOff } from "lucide-react";
-import { useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { AtlasArtwork } from "@/components/AtlasArtwork";
 import { CreateWorldDialog } from "@/components/CreateWorldDialog";
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
@@ -31,6 +31,8 @@ export default function HomePage() {
   const [showArchived, setShowArchived] = useState(false);
   const [importError, setImportError] = useState("");
   const [notice, setNotice] = useState("");
+  const [worldAction, setWorldAction] = useState<{ kind: "rename" | "delete"; campaign: CampaignCard } | null>(null);
+  const [worldName, setWorldName] = useState("");
   const importInput = useRef<HTMLInputElement>(null);
   const worlds = useQuery({ queryKey: ["campaigns", showArchived], queryFn: () => api.campaigns(showArchived) });
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 20_000 });
@@ -47,15 +49,24 @@ export default function HomePage() {
     try { await work(); await refreshWorlds(); setNotice(label); }
     catch (error) { setNotice(error instanceof Error ? error.message : "That action failed."); }
   };
-  const onRename = (campaign: CampaignCard) => {
-    const name = window.prompt("Name this world", campaign.title)?.trim();
-    if (name) void runAction("World renamed.", () => api.renameCampaign(campaign.id, name));
+  const onRename = (campaign: CampaignCard) => { setWorldName(campaign.title); setWorldAction({ kind: "rename", campaign }); };
+  const onDelete = (campaign: CampaignCard) => setWorldAction({ kind: "delete", campaign });
+  const submitWorldAction = (event: FormEvent) => {
+    event.preventDefault();
+    if (!worldAction) return;
+    const { kind, campaign } = worldAction;
+    const title = worldName.trim();
+    if (kind === "rename" && !title) return;
+    setWorldAction(null);
+    void runAction(kind === "rename" ? "World renamed." : "World deleted.", () =>
+      kind === "rename" ? api.renameCampaign(campaign.id, title) : api.deleteCampaign(campaign.id));
   };
-  const onDelete = (campaign: CampaignCard) => {
-    if (window.confirm(`Delete “${campaign.title}” and all of its timelines? This cannot be undone.`)) {
-      void runAction("World deleted.", () => api.deleteCampaign(campaign.id));
-    }
-  };
+  useEffect(() => {
+    if (!worldAction) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setWorldAction(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [worldAction]);
   const onArchive = (campaign: CampaignCard) => void runAction(campaign.archived ? "World restored." : "World archived.", () => api.archiveCampaign(campaign.id, !campaign.archived));
   const onDuplicate = (campaign: CampaignCard) => void runAction("World duplicated.", async () => {
     const copy = await api.duplicateCampaign(campaign.id);
@@ -85,6 +96,7 @@ export default function HomePage() {
         <Link href="/" className="brand-lockup" aria-label="Boundless home">
           <span className="brand-glyph" aria-hidden="true">B</span><span>Boundless</span>
         </Link>
+        <nav className="home-navigation" aria-label="Home navigation"><a href="#worlds">Your worlds</a></nav>
         <div className="topbar-right">
           <button className="connection-indicator" onClick={() => setSettingsOpen(true)} aria-label="Open local model settings">
             <span className={`status-mark ${modelConnected ? "status-mark--on" : "status-mark--off"}`} />
@@ -152,6 +164,18 @@ export default function HomePage() {
       </section>
       <CreateWorldDialog open={createOpen} busy={create.isPending} error={create.error?.message} onClose={() => setCreateOpen(false)} onCreate={(prompt, game_mode, details) => create.mutate({ prompt, game_mode, ...details })} onEnhance={async (prompt, direction) => (await api.enhanceWorld(prompt, direction)).prompt} />
       <ModelSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {worldAction && <div className="dialog-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) setWorldAction(null); }}>
+        <section className="world-action-dialog" role="dialog" aria-modal="true" aria-labelledby="world-action-title">
+          <header className="dialog-head"><h2 id="world-action-title">{worldAction.kind === "rename" ? "Rename this world" : "Delete this world?"}</h2>
+            <button type="button" className="icon-button" aria-label="Close" onClick={() => setWorldAction(null)}>×</button></header>
+          <form onSubmit={submitWorldAction}>
+            {worldAction.kind === "rename" ? <label htmlFor="world-action-name">World name<input id="world-action-name" autoFocus maxLength={160} value={worldName} onChange={(event) => setWorldName(event.target.value)} /></label>
+              : <p>“{worldAction.campaign.title}” and all its timelines will be removed permanently.</p>}
+            <footer className="dialog-actions"><button type="button" className="quiet-button" onClick={() => setWorldAction(null)}>Cancel</button>
+              <button type="submit" className={worldAction.kind === "delete" ? "danger-button" : "primary-button"} disabled={worldAction.kind === "rename" && !worldName.trim()}>{worldAction.kind === "rename" ? "Save name" : "Delete world"}</button></footer>
+          </form>
+        </section>
+      </div>}
     </main>
   );
 }
