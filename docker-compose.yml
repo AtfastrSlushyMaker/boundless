@@ -15,6 +15,7 @@ x-api-environment: &api-environment
   HOST_MLX_SUPPORTED: ${HOST_MLX_SUPPORTED:-false}
   MLX_HOST_BASE_URL: ${MLX_HOST_BASE_URL:-http://host.docker.internal:8088/v1}
   MLX_LAUNCHER_BASE_URL: ${COMPOSE_MLX_LAUNCHER_BASE_URL:-http://host.docker.internal:8091}
+  PORTRAIT_STORAGE_DIR: /app/data/portraits
 
 services:
   db:
@@ -56,6 +57,7 @@ services:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     volumes:
       - api_secrets:/app/.secrets
+      - api_portraits:/app/data/portraits
     mem_limit: 768m
     security_opt:
       - no-new-privileges:true
@@ -84,3 +86,4 @@ services:
 volumes:
   postgres_data:
   api_secrets:
+  api_portraits:

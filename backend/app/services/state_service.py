@@ -1,3 +1,4 @@
+import re
 from copy import deepcopy
 from datetime import datetime
 from typing import Any
@@ -27,13 +28,19 @@ from app.db.models import (
     Turn,
 )
 from app.schemas import StateInterpretation
-from app.services.canon_guard import validate_state_operation
+from app.services.canon_guard import player_death_stated, validate_state_operation
 from app.services.constitution import _explicit_identity
 
 SNAPSHOT_MODELS = [
     CanonRule, Faction, Character, Location, Item, FactionRelationship,
     CharacterRelationship, Event, Memory, Secret, Objective, CampaignSummary,
 ]
+
+
+def player_says_alive(action: str, name: str) -> bool:
+    return bool(re.search(
+        rf"\b(?:I am|I'm|{re.escape(name)} is)\s+(?:not dead(?: yet)?|alive)\b",
+        action, re.IGNORECASE))
 
 
 async def capture_snapshot(session: AsyncSession, branch: Branch) -> dict[str, Any]:
@@ -74,6 +81,100 @@ async def restore_snapshot(session: AsyncSession, branch: Branch, snapshot: dict
 
 async def apply_interpretation(session: AsyncSession, campaign: Campaign, branch: Branch, turn: Turn,
                                interpretation: StateInterpretation) -> dict[str, Any]:
+    async def ensure_person(raw_name: str, visibility: str = "PLAYER_KNOWN") -> Character | None:
+        name = raw_name.strip()[:120]
+        if not name:
+            return None
+        if name.casefold() in {"player", "protagonist", "you", campaign.protagonist_name.casefold()}:
+            name = campaign.protagonist_name
+        person = await session.scalar(select(Character).where(
+            Character.branch_id == branch.id, Character.name.ilike(name)))
+        if person is None:
+            title = name.split(" ", 1)[0] if name.startswith(("King ", "Queen ", "Prince ", "Princess ")) else ""
+            person = Character(campaign_id=campaign.id, branch_id=branch.id, name=name,
+                               role=title, attributes={}, visibility=visibility)
+            session.add(person)
+            await session.flush()
+        return person
+
+    relationship_axes = ("trust", "respect", "fear", "hostility")
+
+    async def save_relationship(change: dict[str, Any], fallback_from: str = "", fallback_to: str = "") -> None:
+        source_name = str(change.get("from", fallback_from)).strip()[:120]
+        target_name = str(change.get("to", fallback_to)).strip()[:120]
+        if not source_name or not target_name or source_name.casefold() == target_name.casefold():
+            return
+        visibility = str(change.get("visibility", "PLAYER_KNOWN"))[:24]
+        if visibility not in {"PLAYER_KNOWN", "CHARACTER_KNOWN", "WORLD_SECRET", "GM_ONLY"}:
+            visibility = "PLAYER_KNOWN"
+        source = await ensure_person(source_name, visibility)
+        target = await ensure_person(target_name, visibility)
+        if not source or not target:
+            return
+        relation = await session.scalar(select(CharacterRelationship).where(
+            CharacterRelationship.branch_id == branch.id,
+            CharacterRelationship.from_character_id == source.id,
+            CharacterRelationship.to_character_id == target.id,
+        ))
+        if relation is None:
+            relation = CharacterRelationship(campaign_id=campaign.id, branch_id=branch.id,
+                from_character_id=source.id, to_character_id=target.id, dimensions={}, visibility=visibility)
+            session.add(relation)
+
+        dimensions = dict(relation.dimensions or {})
+        supplied = change.get("dimensions") if isinstance(change.get("dimensions"), dict) else {}
+        deltas = change.get("deltas") if isinstance(change.get("deltas"), dict) else {}
+        axis_values: dict[str, int] = {}
+        for axis in relationship_axes:
+            current = dimensions.get(axis)
+            if isinstance(current, (int, float)) and not isinstance(current, bool):
+                axis_values[axis] = max(0, min(100, round(current)))
+            absolute = supplied.get(axis)
+            if isinstance(absolute, (int, float)) and not isinstance(absolute, bool):
+                axis_values[axis] = max(0, min(100, round(absolute)))
+
+        reasons = change.get("reasons", [])
+        if not isinstance(reasons, list):
+            reasons = []
+        reason = change.get("reason") or change.get("event")
+        if isinstance(reason, str) and reason.strip():
+            reasons = [*reasons, reason]
+        reasons = [str(value).strip()[:500] for value in reasons if str(value).strip()][:8]
+        has_axis_update = any(
+            isinstance(supplied.get(axis), (int, float)) and not isinstance(supplied.get(axis), bool)
+            or isinstance(deltas.get(axis), (int, float)) and not isinstance(deltas.get(axis), bool)
+            for axis in relationship_axes
+        )
+        for axis in relationship_axes:
+            delta = deltas.get(axis)
+            if isinstance(delta, (int, float)) and not isinstance(delta, bool):
+                axis_values[axis] = max(0, min(100, axis_values.get(axis, 50 if axis in {"trust", "respect"} else 0) + round(delta)))
+        dimensions.update({key: value for key, value in supplied.items()
+                           if key not in {*relationship_axes, "history", "last_interaction", "deltas"}})
+        dimensions.update(axis_values)
+
+        if reasons or has_axis_update:
+            location = str(change.get("location") or (branch.current_state or {}).get("current_location") or "").strip()[:160]
+            history = dimensions.get("history", [])
+            if not isinstance(history, list):
+                history = []
+            for note in reasons:
+                record = {"reason": note, "turn_index": turn.turn_index, "turn_id": str(turn.id)}
+                if location:
+                    record["location"] = location
+                if not any(item.get("turn_id") == record["turn_id"] and item.get("reason") == note
+                           for item in history if isinstance(item, dict)):
+                    history.append(record)
+            dimensions["history"] = history[-100:]
+            last_interaction = {"turn_index": turn.turn_index, "turn_id": str(turn.id)}
+            if location:
+                last_interaction["location"] = location
+            dimensions["last_interaction"] = last_interaction
+        relation.dimensions = dimensions
+        if isinstance(change.get("summary"), str):
+            relation.summary = change["summary"][:2000]
+        relation.visibility = visibility
+
     rows = await session.scalars(select(CanonRule).where(
         CanonRule.campaign_id == campaign.id,
         (CanonRule.branch_id.is_(None) | (CanonRule.branch_id == branch.id)),
@@ -83,6 +184,13 @@ async def apply_interpretation(session: AsyncSession, campaign: Campaign, branch
     applied: list[dict[str, Any]] = []
     for operation_model in interpretation.state_changes:
         operation = operation_model.model_dump(mode="json")
+        if operation.get("kind") in {"UPDATE_CHARACTER", "CHANGE_CHARACTER_STATUS"}:
+            person = str(operation.get("name") or operation.get("subject") or "").casefold()
+            status = str(operation.get("value", {}).get("status", "")).casefold()
+            if (person in {"player", "protagonist", "you", campaign.protagonist_name.casefold()}
+                    and status in {"dead", "deceased"}
+                    and not player_death_stated(turn.gm_response or "", campaign.protagonist_name)):
+                continue
         validate_state_operation(operation, campaign.constitution, rules, branch.current_state or {})
         kind = operation["kind"]
         subject = operation.get("subject", "").strip()[:160]
@@ -191,22 +299,7 @@ async def apply_interpretation(session: AsyncSession, campaign: Campaign, branch
                         characters=value.get("characters", [])[:20], locations=value.get("locations", [])[:20],
                         factions=value.get("factions", [])[:20], items=value.get("items", [])[:20], keywords=value.get("keywords", [])[:30]))
         elif kind == "CHANGE_RELATIONSHIP":
-            source_name = str(value.get("from", campaign.protagonist_name)).casefold()
-            target_name = str(value.get("to", subject or name)).casefold()
-            source = await session.scalar(select(Character).where(Character.branch_id == branch.id, Character.name.ilike(source_name)))
-            target = await session.scalar(select(Character).where(Character.branch_id == branch.id, Character.name.ilike(target_name)))
-            if source and target and source.id != target.id:
-                relation = await session.scalar(select(CharacterRelationship).where(
-                    CharacterRelationship.branch_id == branch.id, CharacterRelationship.from_character_id == source.id,
-                    CharacterRelationship.to_character_id == target.id,
-                ))
-                if relation is None:
-                    relation = CharacterRelationship(campaign_id=campaign.id, branch_id=branch.id,
-                        from_character_id=source.id, to_character_id=target.id, dimensions={}, visibility=visibility)
-                    session.add(relation)
-                relation.dimensions = {**(relation.dimensions or {}), **value.get("dimensions", {})}
-                if "summary" in value:
-                    relation.summary = str(value["summary"])[:2000]
+            await save_relationship(value, campaign.protagonist_name, subject or name)
         elif kind == "CREATE_SECRET" and name:
             session.add(Secret(campaign_id=campaign.id, branch_id=branch.id, name=name,
                 content=str(value.get("content", ""))[:5000], visibility=visibility,
@@ -298,6 +391,11 @@ async def apply_interpretation(session: AsyncSession, campaign: Campaign, branch
         starting_state["identity"] = {**(starting_state.get("identity") or {}), **explicit_identity}
         constitution["starting_state"] = starting_state
         campaign.constitution = constitution
+    if player_says_alive(turn.player_action, campaign.protagonist_name):
+        branch.current_state = {**(branch.current_state or {}), "player_status": "alive"}
+        protagonist = await ensure_person(campaign.protagonist_name)
+        if protagonist:
+            protagonist.status = "alive"
 
     for change in interpretation.knowledge_changes[:40]:
         person_name = str(change.get("character", change.get("who", ""))).strip()[:120]
@@ -313,29 +411,7 @@ async def apply_interpretation(session: AsyncSession, campaign: Campaign, branch
                                  "source_turn_id": str(turn.id)})
                 person.knowledge = existing[-200:]
     for change in interpretation.relationship_changes[:30]:
-        source_name = str(change.get("from", "")).strip()[:120]
-        target_name = str(change.get("to", "")).strip()[:120]
-        if not source_name or not target_name or source_name.casefold() == target_name.casefold():
-            continue
-        source = await session.scalar(select(Character).where(
-            Character.branch_id == branch.id, Character.name.ilike(source_name)))
-        target = await session.scalar(select(Character).where(
-            Character.branch_id == branch.id, Character.name.ilike(target_name)))
-        if not source or not target:
-            continue
-        relation = await session.scalar(select(CharacterRelationship).where(
-            CharacterRelationship.branch_id == branch.id,
-            CharacterRelationship.from_character_id == source.id,
-            CharacterRelationship.to_character_id == target.id))
-        if relation is None:
-            relation = CharacterRelationship(campaign_id=campaign.id, branch_id=branch.id,
-                from_character_id=source.id, to_character_id=target.id,
-                dimensions={}, visibility=str(change.get("visibility", "PLAYER_KNOWN"))[:24])
-            session.add(relation)
-        if isinstance(change.get("dimensions"), dict):
-            relation.dimensions = {**(relation.dimensions or {}), **change["dimensions"]}
-        if "summary" in change:
-            relation.summary = str(change["summary"])[:2000]
+        await save_relationship(change)
     for event in interpretation.events[:30]:
         content = str(event.get("content", ""))[:5000]
         if content:

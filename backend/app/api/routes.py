@@ -8,7 +8,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,12 +24,14 @@ from app.db.models import (
     Checkpoint,
     Event,
     Faction,
+    ImageProfile,
     Item,
     Location,
     Memory,
     MessageVersion,
     ModelProfile,
     Objective,
+    PortraitJob,
     Secret,
     Turn,
 )
@@ -44,26 +46,49 @@ from app.schemas import (
     CampaignModeUpdate,
     CampaignRename,
     CampaignThemeUpdate,
+    CharacterUpdate,
     DeepSeekModelsRequest,
+    ImageSettingsUpdate,
     MLXStartRequest,
     ModelSettingsUpdate,
+    PortraitRequest,
+    RelationshipUpdate,
     RewindRequest,
     TurnCreate,
     TurnEdit,
     WorldEnhanceRequest,
 )
 from app.services.campaign_service import create_campaign, refresh_setup_from_premise
-from app.services.canon_guard import check_narrative
+from app.services.canon_guard import check_narrative, player_death_stated
 from app.services.choice_service import suggest_choices
 from app.services.constitution import derive_theme
 from app.services.context_builder import history_for_branch
 from app.services.export_service import export_campaign, import_campaign
+from app.services.image_provider import (
+    MAX_IMAGE_BYTES,
+    ComfyUIImageProvider,
+    portrait_file,
+    store_portrait,
+    validate_endpoint,
+)
 from app.services.meta_commands import apply_meta_command
 from app.services.narration import clean_history_narration
-from app.services.state_service import apply_interpretation, capture_snapshot, restore_snapshot
+from app.services.portrait_jobs import (
+    enqueue_portrait,
+    image_profile,
+    profile_dict,
+    queue_automatic_portraits,
+)
+from app.services.state_service import (
+    apply_interpretation,
+    capture_snapshot,
+    player_says_alive,
+    restore_snapshot,
+)
 from app.services.summary_service import update_campaign_summary
 from app.services.timeline import fork_branch, rewind_branch
 from app.services.turn_service import _interpret, active_profile, provider_for_profile, stream_turn
+from app.services.world_index import index_people_from_narration, player_location_for_turn
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -121,32 +146,32 @@ async def _detail(session: AsyncSession, campaign: Campaign, branch: Branch) -> 
     for turn in visible_turns:
         turn["gm_response"] = clean_history_narration(turn.get("gm_response") or "")
     characters = list((await session.scalars(select(Character).where(
-        Character.branch_id == branch.id, Character.visibility != "GM_ONLY").order_by(Character.name))).all())
+        Character.branch_id == branch.id, Character.visibility == "PLAYER_KNOWN").order_by(Character.name))).all())
     locations = list((await session.scalars(select(Location).where(
-        Location.branch_id == branch.id, Location.visibility != "GM_ONLY").order_by(Location.name))).all())
+        Location.branch_id == branch.id, Location.visibility == "PLAYER_KNOWN").order_by(Location.name))).all())
     factions = list((await session.scalars(select(Faction).where(
-        Faction.branch_id == branch.id, Faction.visibility != "GM_ONLY").order_by(Faction.name))).all())
+        Faction.branch_id == branch.id, Faction.visibility == "PLAYER_KNOWN").order_by(Faction.name))).all())
     items = list((await session.scalars(select(Item).where(
-        Item.branch_id == branch.id, Item.visibility != "GM_ONLY").order_by(Item.name))).all())
+        Item.branch_id == branch.id, Item.visibility == "PLAYER_KNOWN").order_by(Item.name))).all())
     objectives = list((await session.scalars(select(Objective).where(
-        Objective.branch_id == branch.id, Objective.visibility != "GM_ONLY").order_by(Objective.status, Objective.title))).all())
+        Objective.branch_id == branch.id, Objective.visibility == "PLAYER_KNOWN").order_by(Objective.status, Objective.title))).all())
     events = list((await session.scalars(select(Event).where(
-        Event.branch_id == branch.id, Event.visibility != "GM_ONLY").order_by(Event.created_at.desc()).limit(40))).all())
+        Event.branch_id == branch.id, Event.visibility == "PLAYER_KNOWN").order_by(Event.created_at.desc()))).all())
     memories = list((await session.scalars(select(Memory).where(
-        Memory.branch_id == branch.id, Memory.visibility != "GM_ONLY").order_by(Memory.importance.desc(), Memory.created_at.desc()).limit(40))).all())
+        Memory.branch_id == branch.id, Memory.visibility == "PLAYER_KNOWN").order_by(Memory.importance.desc(), Memory.created_at.desc()).limit(40))).all())
     rules = list((await session.scalars(select(CanonRule).where(
         CanonRule.campaign_id == campaign.id,
         (CanonRule.branch_id.is_(None) | (CanonRule.branch_id == branch.id)),
-        CanonRule.visibility != "GM_ONLY").order_by(CanonRule.created_at))).all())
+        CanonRule.visibility == "PLAYER_KNOWN").order_by(CanonRule.created_at))).all())
     relations = list((await session.scalars(select(CharacterRelationship).where(
-        CharacterRelationship.branch_id == branch.id, CharacterRelationship.visibility != "GM_ONLY"))).all())
+        CharacterRelationship.branch_id == branch.id, CharacterRelationship.visibility == "PLAYER_KNOWN"))).all())
     known_secrets = list((await session.scalars(select(Secret).where(
-        Secret.branch_id == branch.id, Secret.visibility != "GM_ONLY"))).all())
+        Secret.branch_id == branch.id, Secret.visibility == "PLAYER_KNOWN"))).all())
     branches = list((await session.scalars(select(Branch).where(Branch.campaign_id == campaign.id).order_by(Branch.created_at))).all())
     char_map = {row.id: row.name for row in characters}
-    relationship_data = [{"id": str(row.id), "from": char_map.get(row.from_character_id, "Unknown"),
-        "to": char_map.get(row.to_character_id, "Unknown"), "dimensions": row.dimensions, "summary": row.summary}
-        for row in relations]
+    relationship_data = [{"id": str(row.id), "from": char_map[row.from_character_id],
+        "to": char_map[row.to_character_id], "dimensions": row.dimensions, "summary": row.summary}
+        for row in relations if row.from_character_id in char_map and row.to_character_id in char_map]
     current_location = branch.current_state.get("current_location", "")
     summary = await session.scalar(select(CampaignSummary).where(
         CampaignSummary.branch_id == branch.id, CampaignSummary.summary_type == "campaign"))
@@ -302,6 +327,32 @@ async def write_model_settings(payload: ModelSettingsUpdate, session: AsyncSessi
     return _model_status(profile)
 
 
+@router.get("/settings/images")
+async def read_image_settings(session: AsyncSession = Depends(get_session)):
+    return profile_dict(await image_profile(session))
+
+
+@router.put("/settings/images")
+async def write_image_settings(payload: ImageSettingsUpdate, session: AsyncSession = Depends(get_session)):
+    profile = await image_profile(session)
+    if profile is None:
+        profile = ImageProfile()
+        session.add(profile)
+    for key, value in payload.model_dump().items():
+        setattr(profile, key, value)
+    await session.commit()
+    return profile_dict(profile)
+
+
+@router.get("/settings/images/test")
+async def test_image_connection(base_url: str = Query(default="", max_length=400)):
+    try:
+        provider = ComfyUIImageProvider(validate_endpoint(base_url))
+        return await provider.health_check()
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        return {"status": "offline", "detail": str(exc)[:240], "models": []}
+
+
 @router.get("/campaigns")
 async def list_campaigns(include_archived: bool = False, session: AsyncSession = Depends(get_session)):
     query = select(Campaign).order_by(Campaign.updated_at.desc())
@@ -367,6 +418,160 @@ async def campaign_detail(campaign_id: UUID, branch_id: UUID | None = None, sess
     return await _detail(session, campaign, branch)
 
 
+async def _known_character(session: AsyncSession, campaign_id: UUID, branch_id: UUID,
+                           character_id: UUID) -> Character:
+    character = await session.get(Character, character_id)
+    if not character or character.campaign_id != campaign_id or character.branch_id != branch_id \
+            or character.visibility != "PLAYER_KNOWN":
+        raise HTTPException(404, "Character not found in this timeline.")
+    return character
+
+
+@router.post("/campaigns/{campaign_id}/characters/{character_id}/avatar")
+async def generate_character_avatar(campaign_id: UUID, character_id: UUID, branch_id: UUID,
+                                    payload: PortraitRequest | None = None,
+                                    session: AsyncSession = Depends(get_session)):
+    campaign = await _campaign(session, campaign_id)
+    await _branch(session, campaign, branch_id)
+    character = await _known_character(session, campaign_id, branch_id, character_id)
+    try:
+        job = await enqueue_portrait(session, campaign, character,
+                                     new_identity_seed=bool(payload and payload.new_seed))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await session.commit()
+    return {"done": False, "job_id": str(job.id), "status": job.status}
+
+
+@router.get("/campaigns/{campaign_id}/characters/{character_id}/avatar")
+async def character_avatar_status(campaign_id: UUID, character_id: UUID, branch_id: UUID,
+                                  session: AsyncSession = Depends(get_session)):
+    await _branch(session, await _campaign(session, campaign_id), branch_id)
+    character = await _known_character(session, campaign_id, branch_id, character_id)
+    job = await session.scalar(select(PortraitJob).where(
+        PortraitJob.character_id == character.id).order_by(PortraitJob.created_at.desc()).limit(1))
+    return {"done": job.status == "COMPLETE" if job else bool((character.attributes or {}).get("avatar_url")),
+            "job_id": str(job.id) if job else "", "status": job.status if job else "NONE",
+            "error": job.error if job and job.status == "FAILED" else "",
+            "avatar_url": (character.attributes or {}).get("avatar_url")}
+
+
+@router.delete("/campaigns/{campaign_id}/characters/{character_id}/avatar")
+async def remove_character_avatar(campaign_id: UUID, character_id: UUID, branch_id: UUID,
+                                  session: AsyncSession = Depends(get_session)):
+    await _branch(session, await _campaign(session, campaign_id), branch_id)
+    character = await _known_character(session, campaign_id, branch_id, character_id)
+    jobs = (await session.scalars(select(PortraitJob).where(
+        PortraitJob.character_id == character.id))).all()
+    current_url = (character.attributes or {}).get("avatar_url", "")
+    for job in jobs:
+        if job.status in {"QUEUED", "GENERATING"}:
+            job.status = "CANCELLED"
+        if current_url == f"/api/portraits/{job.id}":
+            if job.image_path:
+                try:
+                    portrait_file(job.image_path).unlink(missing_ok=True)
+                except ValueError:
+                    pass
+                job.image_path = ""
+            job.status = "CANCELLED"
+    attributes = dict(character.attributes or {})
+    attributes.pop("avatar_url", None)
+    attributes.pop("avatar_job", None)
+    character.attributes = attributes
+    await session.commit()
+    return {"removed": True}
+
+
+@router.post("/campaigns/{campaign_id}/characters/{character_id}/avatar/upload")
+async def upload_character_avatar(campaign_id: UUID, character_id: UUID, branch_id: UUID,
+                                  image: UploadFile = File(...), session: AsyncSession = Depends(get_session)):
+    await _branch(session, await _campaign(session, campaign_id), branch_id)
+    character = await _known_character(session, campaign_id, branch_id, character_id)
+    data = await image.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, "Portrait image exceeds 12 MB.")
+    pending = (await session.scalars(select(PortraitJob).where(
+        PortraitJob.character_id == character_id,
+        PortraitJob.status.in_(["QUEUED", "GENERATING"])))).all()
+    for queued_job in pending:
+        queued_job.status = "CANCELLED"
+    job = PortraitJob(campaign_id=campaign_id, branch_id=branch_id, character_id=character_id,
+                      provider="perchance_assisted", status="COMPLETE", metadata_json={"source": "user_upload"},
+                      next_attempt_at=datetime.now(UTC))
+    session.add(job)
+    await session.flush()
+    try:
+        job.image_path = store_portrait(data, campaign_id, character_id, job.id)
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(422, str(exc)) from exc
+    character.attributes = {**(character.attributes or {}), "avatar_url": f"/api/portraits/{job.id}"}
+    await session.commit()
+    return {"done": True, "avatar_url": f"/api/portraits/{job.id}"}
+
+
+@router.get("/portraits/{portrait_id}")
+async def serve_portrait(portrait_id: UUID, session: AsyncSession = Depends(get_session)):
+    job = await session.get(PortraitJob, portrait_id)
+    if not job or job.status != "COMPLETE" or not job.image_path:
+        raise HTTPException(404, "Portrait not found.")
+    try:
+        path = portrait_file(job.image_path)
+    except ValueError as exc:
+        raise HTTPException(404, "Portrait not found.") from exc
+    if not path.is_file():
+        raise HTTPException(404, "Portrait file is missing.")
+    return FileResponse(path, media_type={".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}[path.suffix.lower()],
+                        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
+@router.patch("/campaigns/{campaign_id}/characters/{character_id}")
+async def update_character(campaign_id: UUID, character_id: UUID, branch_id: UUID,
+                           payload: CharacterUpdate, session: AsyncSession = Depends(get_session)):
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    character = await _known_character(session, campaign_id, branch_id, character_id)
+    character.role = payload.role.strip()
+    character.personality = payload.personality.strip()
+    attributes = dict(character.attributes or {})
+    for key in ("appearance", "sex", "gender", "pronouns"):
+        value = getattr(payload, key).strip()
+        if value:
+            attributes[key] = value
+        else:
+            attributes.pop(key, None)
+    character.attributes = attributes
+    await session.commit()
+    return await _detail(session, campaign, branch)
+
+
+@router.patch("/campaigns/{campaign_id}/relationships/{relationship_id}")
+async def update_relationship(campaign_id: UUID, relationship_id: UUID, branch_id: UUID,
+                              payload: RelationshipUpdate, session: AsyncSession = Depends(get_session)):
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    relation = await session.get(CharacterRelationship, relationship_id)
+    if not relation or relation.campaign_id != campaign_id or relation.branch_id != branch_id \
+            or relation.visibility != "PLAYER_KNOWN":
+        raise HTTPException(404, "Relationship not found in this timeline.")
+    dimensions = dict(relation.dimensions or {})
+    for axis in ("trust", "respect", "fear", "hostility"):
+        value = getattr(payload, axis)
+        if value is None:
+            dimensions.pop(axis, None)
+        else:
+            dimensions[axis] = value
+    if payload.status.strip():
+        dimensions["status"] = payload.status.strip()
+    else:
+        dimensions.pop("status", None)
+    relation.dimensions = dimensions
+    relation.summary = payload.summary.strip()
+    await session.commit()
+    return await _detail(session, campaign, branch)
+
+
 @router.patch("/campaigns/{campaign_id}")
 async def rename_campaign(campaign_id: UUID, payload: CampaignRename, session: AsyncSession = Depends(get_session)):
     campaign = await _campaign(session, campaign_id)
@@ -407,6 +612,41 @@ async def refresh_campaign_setup(campaign_id: UUID, branch_id: UUID | None = Non
     campaign = await _campaign(session, campaign_id)
     branch = await _branch(session, campaign, branch_id)
     await refresh_setup_from_premise(session, campaign)
+    return await _detail(session, campaign, branch)
+
+
+@router.post("/campaigns/{campaign_id}/reindex-people")
+async def reindex_campaign_people(campaign_id: UUID, branch_id: UUID | None = None,
+                                  session: AsyncSession = Depends(get_session)):
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    last_death = -1
+    last_alive_correction = -1
+    starting_state = (campaign.constitution or {}).get("starting_state", {})
+    current_location = str(starting_state.get("current_location", "")) if isinstance(starting_state, dict) else ""
+    for turn in await history_for_branch(session, branch.head_turn_id, limit=500):
+        current_location = player_location_for_turn(campaign, turn, current_location)
+        if turn.status == "complete" and turn.gm_response:
+            await index_people_from_narration(session, campaign, branch, turn, current_location)
+            if player_death_stated(turn.gm_response, campaign.protagonist_name):
+                last_death = turn.turn_index
+        if player_says_alive(turn.player_action, campaign.protagonist_name):
+            last_alive_correction = turn.turn_index
+    if last_alive_correction > last_death:
+        branch.current_state = {**(branch.current_state or {}), "player_status": "alive"}
+        protagonist = await session.scalar(select(Character).where(
+            Character.branch_id == branch.id, Character.name.ilike(campaign.protagonist_name)))
+        if protagonist:
+            protagonist.status = "alive"
+    if branch.head_turn_id:
+        head = await session.get(Turn, branch.head_turn_id)
+        if head:
+            checkpoint = await session.scalar(select(Checkpoint).where(
+                Checkpoint.branch_id == branch.id, Checkpoint.turn_id == head.id,
+                Checkpoint.turn_index == head.turn_index).order_by(Checkpoint.created_at.desc()))
+            if checkpoint:
+                checkpoint.state_snapshot = await capture_snapshot(session, branch)
+    await session.commit()
     return await _detail(session, campaign, branch)
 
 
@@ -506,6 +746,12 @@ async def create_turn(campaign_id: UUID, payload: TurnCreate, request: Request, 
             async for event in stream_turn(session, campaign, branch, action_for_gm, payload.instruction):
                 if await request.is_disconnected():
                     break
+                if event.get("type") == "complete":
+                    try:
+                        await queue_automatic_portraits(session, campaign, branch.id)
+                    except Exception:
+                        await session.rollback()
+                        logger.exception("Automatic portrait queueing failed after a completed turn")
                 yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
                 if event.get("type") == "complete":
                     profile = await active_profile(session)
@@ -576,6 +822,12 @@ async def regenerate_turn(turn_id: UUID, payload: TurnCreate, request: Request, 
                                       payload.instruction or payload.action, existing_turn=turn):
             if await request.is_disconnected():
                 break
+            if event.get("type") == "complete":
+                try:
+                    await queue_automatic_portraits(session, campaign, branch.id)
+                except Exception:
+                    await session.rollback()
+                    logger.exception("Automatic portrait queueing failed after a rewritten turn")
             yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
         yield "data: [DONE]\n\n"
 

@@ -263,6 +263,47 @@ class ModelProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class ImageProfile(Base):
+    __tablename__ = "image_profiles"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    provider: Mapped[str] = mapped_column(String(32), default="none")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    base_url: Mapped[str] = mapped_column(String(400), default="")
+    checkpoint: Mapped[str] = mapped_column(String(240), default="")
+    workflow: Mapped[str] = mapped_column(String(80), default="boundless_portrait_v1")
+    width: Mapped[int] = mapped_column(Integer, default=768)
+    height: Mapped[int] = mapped_column(Integer, default=1024)
+    steps: Mapped[int] = mapped_column(Integer, default=28)
+    cfg: Mapped[float] = mapped_column(Float, default=6.5)
+    sampler: Mapped[str] = mapped_column(String(80), default="dpmpp_2m")
+    scheduler: Mapped[str] = mapped_column(String(80), default="karras")
+    auto_recurring: Mapped[bool] = mapped_column(Boolean, default=True)
+    auto_major: Mapped[bool] = mapped_column(Boolean, default=True)
+    auto_companion: Mapped[bool] = mapped_column(Boolean, default=True)
+    auto_minor: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class PortraitJob(Base):
+    __tablename__ = "portrait_jobs"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[UUID] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), index=True)
+    character_id: Mapped[UUID] = mapped_column(ForeignKey("characters.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(24), default="QUEUED", index=True)
+    remote_job_id: Mapped[str] = mapped_column(String(160), default="")
+    image_path: Mapped[str] = mapped_column(String(400), default="")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
+    error: Mapped[str] = mapped_column(String(500), default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Faction(Base):
     __tablename__ = "factions"
     __table_args__ = (UniqueConstraint("campaign_id", "branch_id", "name", name="uq_faction_branch_name"),)

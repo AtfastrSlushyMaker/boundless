@@ -77,6 +77,17 @@ async def build_messages(session: AsyncSession, campaign: Campaign, branch_id: U
     relationships = list((await session.scalars(select(CharacterRelationship).where(
         CharacterRelationship.branch_id == branch_id, CharacterRelationship.visibility != "GM_ONLY",
     ).limit(80))).all())
+    character_names = {row.id: row.name for row in characters}
+    relationship_context = []
+    for row in relationships:
+        if row.from_character_id not in character_names or row.to_character_id not in character_names:
+            continue
+        relationship = {"from": character_names[row.from_character_id],
+                        "to": character_names[row.to_character_id], **_public(row)}
+        dimensions = relationship.get("dimensions")
+        if isinstance(dimensions, dict) and isinstance(dimensions.get("history"), list):
+            relationship["dimensions"] = {**dimensions, "history": dimensions["history"][-6:]}
+        relationship_context.append(relationship)
     objectives = list((await session.scalars(select(Objective).where(
         Objective.branch_id == branch_id, Objective.visibility != "GM_ONLY", Objective.status == "active",
     ).limit(40))).all())
@@ -99,15 +110,18 @@ async def build_messages(session: AsyncSession, campaign: Campaign, branch_id: U
 
     constitution = dict(campaign.constitution)
     constitution["original_prompt"] = campaign.original_prompt
+    protagonist = next((_public(row) for row in characters if row.name.casefold() == player_name),
+                       {"name": campaign.protagonist_name})
+    if current_state.get("player_status"):
+        protagonist["status"] = current_state["player_status"]
     canon = {
         "rules": rules,
         "current_state": current_state,
-        "protagonist": next((_public(row) for row in characters if row.name.casefold() == player_name),
-                            {"name": campaign.protagonist_name}),
+        "protagonist": protagonist,
         "characters": [_public(row) for row in characters if row.name.casefold() != player_name],
         "locations": [_public(row) for row in locations],
         "inventory": [_public(row) for row in items if row.owner_name.casefold() in {player_name, "player"}],
-        "relationships": [_public(row) for row in relationships],
+        "relationships": relationship_context,
         "factions": [_public(row) for row in factions],
         "active_objectives": [_public(row) for row in objectives],
         "known_memories": [row.content for row in relevant_memories],

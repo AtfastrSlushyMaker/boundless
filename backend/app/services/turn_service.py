@@ -25,14 +25,15 @@ from app.db.models import (
 from app.llm.base import LLMProvider, ModelUnavailable
 from app.llm.gateway import get_provider
 from app.schemas import StateInterpretation, StateOperation
-from app.services.canon_guard import CanonViolation, check_narrative
+from app.services.canon_guard import CanonViolation, check_narrative, check_player_agency
 from app.services.choice_service import suggest_choices
 from app.services.context_builder import build_messages
 from app.services.narration import stream_narration
-from app.services.state_service import apply_interpretation, capture_snapshot
+from app.services.state_service import apply_interpretation, capture_snapshot, player_says_alive
+from app.services.world_index import index_people_from_narration
 
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts"
-LENGTH_TOKENS = {"concise": 520, "standard": 1200, "detailed": 1900, "novelistic": 2600}
+LENGTH_TOKENS = {"concise": 520, "standard": 900, "detailed": 1300, "novelistic": 1600}
 logger = logging.getLogger(__name__)
 
 
@@ -201,6 +202,7 @@ async def stream_turn(session: AsyncSession, campaign: Campaign, branch: Branch,
     await ensure_hidden_canon(session, campaign, branch, provider)
     previous_state = deepcopy(branch.current_state or {})
     parent_turn_id = existing_turn.parent_turn_id if existing_turn else branch.head_turn_id
+    parent_turn = await session.get(Turn, parent_turn_id) if parent_turn_id else None
     if existing_turn:
         before = await session.scalar(select(Checkpoint).where(
             Checkpoint.branch_id == branch.id, Checkpoint.turn_id == existing_turn.id,
@@ -228,8 +230,10 @@ async def stream_turn(session: AsyncSession, campaign: Campaign, branch: Branch,
     is_local_runtime = provider_kind in {"mlx", "ollama"} or (
         provider_kind == "openai-compatible" and _is_local_endpoint(endpoint)
     )
+    context_state = {**(branch.current_state or {}), "player_status": "alive"} if player_says_alive(
+        action, campaign.protagonist_name) else branch.current_state or {}
     messages = await build_messages(session, campaign, branch.id, action, parent_turn_id,
-                                    branch.current_state or {}, instruction,
+                                    context_state, instruction,
                                     context_window=profile.context_window if profile and is_local_runtime else None)
     full = ""
     try:
@@ -239,7 +243,6 @@ async def stream_turn(session: AsyncSession, campaign: Campaign, branch: Branch,
             temperature=profile.temperature if profile else settings.llm_temperature,
         ):
             full += piece
-            yield {"type": "delta", "text": piece, "turn_id": str(turn.id)}
         if not full.strip():
             raise ModelUnavailable("The model returned an empty response. Check its chat template and model profile.")
         rules = list((await session.scalars(select(CanonRule).where(
@@ -248,13 +251,18 @@ async def stream_turn(session: AsyncSession, campaign: Campaign, branch: Branch,
         ))).all())
         rule_payload = [{"rule_type": row.rule_type, "strength": row.strength,
                          "statement": row.statement, "exceptions": row.exceptions} for row in rules]
-        violation = check_narrative(full, campaign.constitution, rule_payload)
+        def narration_violation(candidate: str) -> str | None:
+            return (check_narrative(candidate, campaign.constitution, rule_payload) or
+                    check_player_agency(candidate, campaign.protagonist_name, turn.player_action,
+                                        parent_turn.gm_response if parent_turn else ""))
+
+        violation = narration_violation(full)
         if violation:
             corrected = await _repair_canon(provider, messages, full, violation)
-            if check_narrative(corrected, campaign.constitution, rule_payload):
-                raise CanonViolation("The model could not produce a narration consistent with hard canon. Nothing from that response was saved.")
+            if narration_violation(corrected):
+                raise CanonViolation("The model could not keep the player's agency and established canon. Nothing from that response was saved.")
             full = corrected
-            yield {"type": "replace", "text": full, "turn_id": str(turn.id), "reason": "canon_repair"}
+        yield {"type": "delta", "text": full, "turn_id": str(turn.id)}
         turn.gm_response = full.strip()
         turn.status = "interpreting"
         versions = list((await session.scalars(select(MessageVersion).where(
@@ -267,6 +275,10 @@ async def stream_turn(session: AsyncSession, campaign: Campaign, branch: Branch,
         await session.flush()
         interpretation = await _interpret(session, provider, campaign, branch, turn, previous_state)
         await apply_interpretation(session, campaign, branch, turn, interpretation)
+        await index_people_from_narration(
+            session, campaign, branch, turn,
+            str((branch.current_state or {}).get("current_location", "")),
+        )
         turn.suggested_actions = (await suggest_choices(provider, turn.gm_response, turn.player_action,
                                   campaign.protagonist_name)) if campaign.game_mode == "guided" else []
         turn.status = "complete"

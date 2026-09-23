@@ -50,6 +50,57 @@ class CampaignRename(BaseModel):
     title: str = Field(min_length=1, max_length=180)
 
 
+class CharacterUpdate(BaseModel):
+    role: str = Field(max_length=160)
+    personality: str = Field(max_length=2_000)
+    appearance: str = Field(max_length=1_000)
+    sex: str = Field(max_length=60)
+    gender: str = Field(max_length=60)
+    pronouns: str = Field(max_length=60)
+
+
+class RelationshipUpdate(BaseModel):
+    trust: int | None = Field(default=None, ge=0, le=100)
+    respect: int | None = Field(default=None, ge=0, le=100)
+    fear: int | None = Field(default=None, ge=0, le=100)
+    hostility: int | None = Field(default=None, ge=0, le=100)
+    status: str = Field(default="", max_length=120)
+    summary: str = Field(default="", max_length=2_000)
+
+
+class ImageSettingsUpdate(BaseModel):
+    provider: Literal["none", "comfyui", "ai_horde", "perchance_assisted"] = "none"
+    enabled: bool = False
+    base_url: str = Field(default="", max_length=400)
+    checkpoint: str = Field(default="", max_length=240)
+    workflow: Literal["boundless_portrait_v1"] = "boundless_portrait_v1"
+    width: int = Field(default=768, ge=512, le=1536, multiple_of=64)
+    height: int = Field(default=1024, ge=512, le=1536, multiple_of=64)
+    steps: int = Field(default=28, ge=10, le=60)
+    cfg: float = Field(default=6.5, ge=1, le=15)
+    sampler: str = Field(default="dpmpp_2m", max_length=80)
+    scheduler: str = Field(default="karras", max_length=80)
+    auto_recurring: bool = True
+    auto_major: bool = True
+    auto_companion: bool = True
+    auto_minor: bool = False
+
+    @model_validator(mode="after")
+    def validate_provider(self):
+        if self.enabled and self.provider == "none":
+            raise ValueError("Choose an image provider before enabling portraits.")
+        if self.provider == "comfyui" and self.enabled:
+            from app.services.image_provider import validate_endpoint
+            self.base_url = validate_endpoint(self.base_url)
+            if not self.checkpoint.strip():
+                raise ValueError("Choose a ComfyUI checkpoint.")
+        return self
+
+
+class PortraitRequest(BaseModel):
+    new_seed: bool = False
+
+
 class TurnCreate(BaseModel):
     action: str = Field(min_length=1, max_length=12_000)
     branch_id: UUID | None = None
