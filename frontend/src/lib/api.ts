@@ -1,8 +1,17 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 export type GameMode = "freeform" | "guided";
+export type ThemeFamily = "dark_fantasy" | "cyberpunk" | "survival" | "cozy" | "mystery" | "neutral" | "horror" | "romance" | "sci_fi" | "modern";
+export type CharacterSetup = {
+  character_name?: string;
+  character_sex?: "male" | "female" | "intersex" | "other";
+  character_gender?: "man" | "woman" | "nonbinary" | "other";
+  character_pronouns?: "he/him" | "she/her" | "they/them";
+  starting_money?: number;
+  money_currency?: string;
+};
 
 export type Theme = {
-  family: "dark_fantasy" | "cyberpunk" | "survival" | "cozy" | "mystery" | "neutral";
+  family: ThemeFamily;
   mood?: string;
   accent_family?: string;
   background_effect?: string;
@@ -46,7 +55,7 @@ export type Branch = {
   current_state: Record<string, unknown>;
 };
 
-export type Character = { id: string; name: string; role: string; status: string; personality: string };
+export type Character = { id: string; name: string; role: string; status: string; personality: string; attributes: Record<string, unknown> };
 export type Location = { id: string; name: string; region: string; description: string };
 export type Item = { id: string; name: string; quantity: number; condition: string; significance: string };
 export type Relationship = { id: string; to: string; summary: string; dimensions: Record<string, string | number> };
@@ -129,10 +138,14 @@ export const api = {
   capabilities: () => request<SystemCapabilities>("/api/system/capabilities"),
   campaigns: (archived = false) => request<CampaignCard[]>(`/api/campaigns?include_archived=${archived}`),
   campaign: (id: string, branchId?: string) => request<CampaignDetail>(`/api/campaigns/${id}${branchId ? `?branch_id=${branchId}` : ""}`),
-  createCampaign: (payload: { prompt: string; game_mode: GameMode }) => request<CampaignDetail>("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  createCampaign: (payload: { prompt: string; game_mode: GameMode; theme_family?: ThemeFamily } & CharacterSetup) => request<CampaignDetail>("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
   setGameMode: (id: string, branchId: string, gameMode: GameMode) => request<CampaignDetail>(`/api/campaigns/${id}/game-mode?branch_id=${branchId}`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game_mode: gameMode }),
   }),
+  setTheme: (id: string, branchId: string, themeFamily: ThemeFamily) => request<CampaignDetail>(`/api/campaigns/${id}/theme?branch_id=${branchId}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ theme_family: themeFamily }),
+  }),
+  refreshSetup: (id: string, branchId: string) => request<CampaignDetail>(`/api/campaigns/${id}/refresh-setup?branch_id=${branchId}`, { method: "POST" }),
   enhanceWorld: (prompt: string, direction: string) => request<{ prompt: string }>("/api/campaigns/enhance", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, direction }) }),
   renameCampaign: (id: string, title: string) => request(`/api/campaigns/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }) }),
   archiveCampaign: (id: string, archived: boolean) => request(`/api/campaigns/${id}/archive?archived=${archived}`, { method: "POST" }),

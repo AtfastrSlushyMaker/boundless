@@ -15,6 +15,10 @@ Boundless is a local-first text role-playing game. Describe a world and a charac
 
 At world creation, **How do you want to play?** offers **Write every action** and **Get choices after each scene**. In choice mode, the Game Master suggests up to three actions after each completed scene. Click one to attempt it, or type anything in **Your next action**. The **Play style** select in the game lets you switch modes later. Choices are saved with their turns, so they remain available after refreshing or branching. If a model cannot produce usable choices, freeform input remains available.
 
+**World mood** chooses the campaign's colors and map treatment from the premise, or lets you pick a look. You can change it beside Play style during a game. **Character details** in world creation optionally records a name, sex, gender, pronouns, and starting money; leave them blank when the premise already says enough. The character panel shows known details and offers **Refresh details from premise** for older campaigns. The refresh fills missing setup facts and replays previously recorded character and location changes without replacing established facts.
+
+The world record keeps a compact memory of each completed turn even when a local model emits no structured facts. Characters, locations, and possessions are updated from supported state changes, while the narrator is instructed to react to each action and move the scene forward. Explicit player corrections about their own identity take precedence over the narrator's assumptions.
+
 ## Quick start with Docker Compose
 
 This starts PostgreSQL, runs database migrations, and builds the API and web images. Docker Engine with Compose is required. On Apple Silicon Macs, the MLX start button also needs Python 3.11+ and the installed `mlx_lm.server` command. The images do not contain a language model.
@@ -40,15 +44,15 @@ docker compose down
 
 ## Model options
 
-| Provider | Where it runs | Endpoint to enter in Settings |
-| --- | --- | --- |
-| DeepSeek | Hosted API | `https://api.deepseek.com` |
-| Ollama, native app | Your computer | `http://127.0.0.1:11434` |
-| Ollama, Docker API | Your computer | `http://host.docker.internal:11434` |
-| OpenAI-compatible server, native app | Your computer or another host | The server's `/v1` base URL |
-| OpenAI-compatible server, Docker API | A reachable host | A URL reachable from the container, often `http://host.docker.internal:8080/v1` |
-| MLX, native API | Apple Silicon Mac | `http://127.0.0.1:8088/v1` |
-| MLX, Docker API | Apple Silicon Mac host | `http://host.docker.internal:8088/v1` |
+| Provider                             | Where it runs                 | Endpoint to enter in Settings                                                   |
+| ------------------------------------ | ----------------------------- | ------------------------------------------------------------------------------- |
+| DeepSeek                             | Hosted API                    | `https://api.deepseek.com`                                                      |
+| Ollama, native app                   | Your computer                 | `http://127.0.0.1:11434`                                                        |
+| Ollama, Docker API                   | Your computer                 | `http://host.docker.internal:11434`                                             |
+| OpenAI-compatible server, native app | Your computer or another host | The server's `/v1` base URL                                                     |
+| OpenAI-compatible server, Docker API | A reachable host              | A URL reachable from the container, often `http://host.docker.internal:8080/v1` |
+| MLX, native API                      | Apple Silicon Mac             | `http://127.0.0.1:8088/v1`                                                      |
+| MLX, Docker API                      | Apple Silicon Mac host        | `http://host.docker.internal:8088/v1`                                           |
 
 For Ollama, install and start it on the host, then download a model such as [`qwen3.5:9b`](https://ollama.com/library/qwen3.5):
 
@@ -143,15 +147,15 @@ The integration tests use local PostgreSQL and remove campaigns they create. `ma
 
 ## Troubleshooting
 
-| Symptom | Check |
-| --- | --- |
-| `api` will not start | Run `docker compose ps` and `docker compose logs migrate api`. The migration step waits for a healthy database. |
-| Port already in use | Set `APP_PORT`, `FRONTEND_PORT`, or `POSTGRES_PORT` in `.env`; rebuild the web image after changing `APP_PORT`. |
-| Model offline | Check the endpoint in Model settings from the API's point of view. `127.0.0.1` inside a container refers to that container, not the host. |
-| MLX unavailable in Docker | On an Apple Silicon Mac, run `make stack-up`. For direct Compose use, set `HOST_MLX_SUPPORTED=true` in `.env` and recreate the API. On other hosts MLX remains unavailable. |
-| MLX selected but offline | Select a downloaded model and click **Start and use MLX server**. If the Mac companion is offline, run `make mlx-host` and retry. |
-| DeepSeek key missing after switching to Docker | Re-enter the key in Docker Model settings; its named volume is separate from the native `.secrets` folder. |
-| Campaigns seem missing | Confirm that the same Compose project and `postgres_data` volume are in use. `docker compose down` retains it; `down -v` removes it. |
+| Symptom                                        | Check                                                                                                                                                                       |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api` will not start                           | Run `docker compose ps` and `docker compose logs migrate api`. The migration step waits for a healthy database.                                                             |
+| Port already in use                            | Set `APP_PORT`, `FRONTEND_PORT`, or `POSTGRES_PORT` in `.env`; rebuild the web image after changing `APP_PORT`.                                                             |
+| Model offline                                  | Check the endpoint in Model settings from the API's point of view. `127.0.0.1` inside a container refers to that container, not the host.                                   |
+| MLX unavailable in Docker                      | On an Apple Silicon Mac, run `make stack-up`. For direct Compose use, set `HOST_MLX_SUPPORTED=true` in `.env` and recreate the API. On other hosts MLX remains unavailable. |
+| MLX selected but offline                       | Select a downloaded model and click **Start and use MLX server**. If the Mac companion is offline, run `make mlx-host` and retry.                                           |
+| DeepSeek key missing after switching to Docker | Re-enter the key in Docker Model settings; its named volume is separate from the native `.secrets` folder.                                                                  |
+| Campaigns seem missing                         | Confirm that the same Compose project and `postgres_data` volume are in use. `docker compose down` retains it; `down -v` removes it.                                        |
 
 ## Contributing and license
 

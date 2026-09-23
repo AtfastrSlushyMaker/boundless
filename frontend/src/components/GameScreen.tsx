@@ -14,7 +14,7 @@ import {
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AtlasArtwork } from "@/components/AtlasArtwork";
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
-import { api, CampaignDetail, GameMode, StreamEvent, streamTurn } from "@/lib/api";
+import { api, CampaignDetail, GameMode, StreamEvent, ThemeFamily, streamTurn } from "@/lib/api";
 
 const OPENING_ACTION = "Open on the campaign's stated starting moment.";
 type LorePanel = "character" | "people" | "inventory" | "rules" | "journal";
@@ -113,16 +113,28 @@ function MemoryActionMenu({ campaign, turnId, branchId, content, onChanged, onEr
   </>;
 }
 
-function SidebarContent({ panel, campaign }: { panel: LorePanel; campaign: CampaignDetail }) {
+function SidebarContent({ panel, campaign, onRefreshSetup, refreshingSetup, refreshedSetup }: {
+  panel: LorePanel; campaign: CampaignDetail; onRefreshSetup: () => void; refreshingSetup: boolean; refreshedSetup: boolean;
+}) {
   if (panel === "character") {
     const constitution = campaign.constitution;
     const abilities = [...((constitution.abilities as string[] | undefined) ?? []), ...((constitution.powers as string[] | undefined) ?? [])].filter((value, index, all) => all.indexOf(value) === index).slice(0, 8);
+    const protagonist = campaign.characters.find((person) => person.name === campaign.protagonist_name);
+    const identity = (protagonist?.attributes ?? ((constitution.starting_state as Record<string, unknown> | undefined)?.identity as Record<string, unknown> | undefined) ?? {});
+    const money = (campaign.current_state.money ?? protagonist?.attributes?.money) as { amount?: number; currency?: string } | undefined;
+    const identityDetails = ([ ["Sex", identity.sex], ["Gender", identity.gender], ["Pronouns", identity.pronouns] ] as const)
+      .filter(([, value]) => typeof value === "string").map(([label, value]) => `${label}: ${value}`);
     return <div className="lore-content">
       <p className="lore-label">YOUR CHARACTER</p>
       <h2 className="lore-name">{campaign.protagonist_name}</h2>
-      <p className="lore-copy">{String(constitution.player_identity ?? "")} {String(campaign.current_state.player_status ?? "alive") !== "alive" && <span>· {String(campaign.current_state.player_status)}</span>}</p>
+      <p className="lore-copy">{identityDetails.join(" · ") || "Identity open"}{String(campaign.current_state.player_status ?? "alive") !== "alive" && <span> · {String(campaign.current_state.player_status)}</span>}</p>
+      {money && typeof money.amount === "number" && <p className="lore-copy">Money: {money.amount.toLocaleString()} {money.currency ?? ""}</p>}
+      {!!(constitution.traits as string[] | undefined)?.length && <section className="lore-group"><h3>Traits</h3><ul className="plain-list">{(constitution.traits as string[]).slice(0, 8).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
+      {!!(constitution.history as string[] | undefined)?.length && <section className="lore-group"><h3>History</h3><ul className="plain-list">{(constitution.history as string[]).slice(0, 8).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
+      {!!(constitution.preferences as string[] | undefined)?.length && <section className="lore-group"><h3>Goals</h3><ul className="plain-list">{(constitution.preferences as string[]).slice(0, 5).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
       {!!abilities.length && <section className="lore-group"><h3>Established abilities</h3><ul className="plain-list">{abilities.map((item: string, index: number) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
       {!!(constitution.limitations as string[] | undefined)?.length && <section className="lore-group"><h3>Limitations</h3><ul className="plain-list">{(constitution.limitations as string[]).slice(0, 8).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
+      <button type="button" className="text-button" onClick={onRefreshSetup} disabled={refreshingSetup}>{refreshingSetup ? "Reading premise…" : refreshedSetup ? "Details refreshed · run again" : "Refresh details from premise"}</button>
       <section className="lore-group"><h3>World rules</h3>{campaign.canon_rules.length ? <ul className="plain-list">{campaign.canon_rules.map((rule, index) => <li key={`${rule.id ?? index}`}>{String(rule.statement)}</li>)}</ul> : <p className="lore-copy">No additional hard rules recorded.</p>}</section>
     </div>;
   }
@@ -191,6 +203,30 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
     },
     onError: (error) => setNotice(error.message),
   });
+  const changeTheme = useMutation({
+    mutationFn: (family: ThemeFamily) => {
+      if (!branchId) throw new Error("Open a campaign before changing its mood.");
+      return api.setTheme(campaignId, branchId, family);
+    },
+    onSuccess: (detail) => {
+      cache.setQueryData(["campaign", campaignId, requestedBranchId], detail);
+      void cache.invalidateQueries({ queryKey: ["campaigns"] });
+      setNotice("");
+    },
+    onError: (error) => setNotice(error.message),
+  });
+  const refreshSetup = useMutation({
+    mutationFn: () => {
+      if (!branchId) throw new Error("Open a campaign before refreshing its details.");
+      return api.refreshSetup(campaignId, branchId);
+    },
+    onSuccess: (detail) => {
+      cache.setQueryData(["campaign", campaignId, requestedBranchId], detail);
+      void cache.invalidateQueries({ queryKey: ["campaigns"] });
+      setNotice("");
+    },
+    onError: (error) => setNotice(error.message),
+  });
 
   const refetchCampaign = useCallback(async () => {
     await cache.invalidateQueries({ queryKey: ["campaign", campaignId] });
@@ -198,7 +234,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
   }, [cache, campaignId]);
 
   const runStream = useCallback(async (storyAction: string, instruction?: string, targetTurnId?: string) => {
-    if (!branchId || generating || changeGameMode.isPending) return;
+    if (!branchId || generating || changeGameMode.isPending || changeTheme.isPending) return;
     const currentRequest = { action: storyAction, instruction, targetTurnId };
     const controller = new AbortController();
     abortRef.current = controller;
@@ -240,12 +276,12 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
     } finally {
       setGenerating(false); abortRef.current = null;
     }
-  }, [branchId, campaignId, generating, changeGameMode.isPending, refetchCampaign]);
+  }, [branchId, campaignId, generating, changeGameMode.isPending, changeTheme.isPending, refetchCampaign]);
 
   const sendAction = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = action.trim();
-    if (!trimmed || generating || changeGameMode.isPending) return;
+    if (!trimmed || generating || changeGameMode.isPending || changeTheme.isPending) return;
     setAction("");
     await runStream(trimmed);
   };
@@ -347,7 +383,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
           <nav className="lore-nav" aria-label="Campaign information">
             {nav.map(([id, label, Icon]) => <button key={id} className={panel === id ? "lore-nav-item lore-nav-item--active" : "lore-nav-item"} onClick={() => { setPanel(id); setMobileNavOpen(false); }} aria-current={panel === id ? "page" : undefined}><Icon size={16} /><span>{label}</span>{panel === id && <motion.span layoutId="lore-cursor" className="lore-cursor" aria-hidden="true" transition={{ type: "spring", stiffness: 380, damping: 34 }} />}</button>)}
           </nav>
-          <div className="rail-content"><SidebarContent panel={panel} campaign={campaign} /></div>
+          <div className="rail-content"><SidebarContent panel={panel} campaign={campaign} onRefreshSetup={() => refreshSetup.mutate()} refreshingSetup={refreshSetup.isPending} refreshedSetup={refreshSetup.isSuccess} /></div>
           <footer className="rail-footer"><Clock3 size={13} /><span>{String(campaign.current_state.world_time ?? "Time unmarked")}</span></footer>
         </aside>
         {mobileNavOpen && <button className="rail-scrim" aria-label="Close campaign notes" onClick={() => setMobileNavOpen(false)} />}
@@ -398,17 +434,21 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
           <form className="action-dock" onSubmit={(event) => void sendAction(event)}>
             <div className="action-dock-head">
               <label htmlFor="player-action">Your next action</label>
-              <label className="play-mode-field" htmlFor="play-mode"><span>Play style</span>
+              <div className="dock-settings"><label className="play-mode-field" htmlFor="world-mood"><span>World mood</span>
+                <select id="world-mood" value={campaign.theme?.family ?? "neutral"} onChange={(event) => changeTheme.mutate(event.target.value as ThemeFamily)} disabled={generating || changeTheme.isPending}>
+                  <option value="dark_fantasy">Dark fantasy</option><option value="horror">Horror</option><option value="mystery">Mystery</option><option value="cozy">Cozy</option><option value="romance">Romance</option><option value="cyberpunk">Cyberpunk</option><option value="sci_fi">Science fiction</option><option value="survival">Survival</option><option value="modern">Modern</option><option value="neutral">Neutral</option>
+                </select>
+              </label><label className="play-mode-field" htmlFor="play-mode"><span>Play style</span>
                 <select id="play-mode" value={campaign.game_mode} onChange={(event) => changeGameMode.mutate(event.target.value as GameMode)} disabled={generating || changeGameMode.isPending}>
                   <option value="freeform">Write actions</option><option value="guided">Offer choices</option>
                 </select>
-              </label>
+              </label></div>
             </div>
             <div className="action-dock-entry">
               <textarea id="player-action" value={action} onChange={(event) => setAction(event.target.value)} onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void sendAction(event as unknown as FormEvent); }
-              }} placeholder="What do you do?" rows={1} disabled={generating || !modelReady || changeGameMode.isPending} />
-              {generating ? <button type="button" className="send-button send-button--stop" aria-label="Stop generation" onClick={() => abortRef.current?.abort()}><StopCircle size={18} /></button> : <button type="submit" className="send-button" aria-label="Send action" disabled={!action.trim() || !modelReady || changeGameMode.isPending}><Send size={17} /></button>}
+              }} placeholder="What do you do?" rows={1} disabled={generating || !modelReady || changeGameMode.isPending || changeTheme.isPending} />
+              {generating ? <button type="button" className="send-button send-button--stop" aria-label="Stop generation" onClick={() => abortRef.current?.abort()}><StopCircle size={18} /></button> : <button type="submit" className="send-button" aria-label="Send action" disabled={!action.trim() || !modelReady || changeGameMode.isPending || changeTheme.isPending}><Send size={17} /></button>}
             </div>
             <div className="dock-foot"><span>Enter to act · Shift + Enter for a new line</span><span>{changeGameMode.isPending ? "Preparing play style…" : modelReady ? campaign.game_mode === "guided" ? "You can always write your own action" : "Free-form action" : "Model required"}</span></div>
           </form>
