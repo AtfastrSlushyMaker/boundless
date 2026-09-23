@@ -1,17 +1,36 @@
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+ThemeFamily = Literal["dark_fantasy", "cyberpunk", "survival", "cozy", "mystery", "neutral", "horror", "romance", "sci_fi", "modern"]
 
 
 class CampaignCreate(BaseModel):
     prompt: str = Field(min_length=12, max_length=30_000)
     title: str | None = Field(default=None, max_length=180)
     game_mode: Literal["freeform", "guided"] = "freeform"
+    theme_family: ThemeFamily | None = None
+    character_name: str | None = Field(default=None, max_length=120)
+    character_sex: Literal["male", "female", "intersex", "other"] | None = None
+    character_gender: Literal["man", "woman", "nonbinary", "other"] | None = None
+    character_pronouns: Literal["he/him", "she/her", "they/them"] | None = None
+    starting_money: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    money_currency: str | None = Field(default=None, max_length=40)
+
+    @model_validator(mode="after")
+    def validate_money(self):
+        if self.starting_money is not None and not (self.money_currency or "").strip():
+            raise ValueError("Choose a currency when adding starting money.")
+        return self
 
 
 class CampaignModeUpdate(BaseModel):
     game_mode: Literal["freeform", "guided"]
+
+
+class CampaignThemeUpdate(BaseModel):
+    theme_family: ThemeFamily
 
 
 class WorldEnhanceRequest(BaseModel):
@@ -105,7 +124,7 @@ class CampaignConstitution(BaseModel):
 
 
 class ThemeProfile(BaseModel):
-    family: Literal["dark_fantasy", "cyberpunk", "survival", "cozy", "mystery", "neutral"] = "neutral"
+    family: ThemeFamily = "neutral"
     mood: str = "quietly expectant"
     accent_family: str = "iron red"
     surface_style: str = "ink"
@@ -123,6 +142,7 @@ class StateOperation(BaseModel):
         "CREATE_EVENT", "CREATE_MEMORY", "CHANGE_RELATIONSHIP", "CREATE_FACTION",
         "CHANGE_FACTION_RELATIONSHIP", "ADVANCE_WORLD_TIME", "CREATE_SECRET", "REVEAL_SECRET",
         "CREATE_OBJECTIVE", "UPDATE_OBJECTIVE", "ADD_CANON_RULE", "MODIFY_CANON_RULE",
+        "UPDATE_MONEY",
     ]
     subject: str = ""
     name: str = ""

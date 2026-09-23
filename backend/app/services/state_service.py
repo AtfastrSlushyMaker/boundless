@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.schemas import StateInterpretation
 from app.services.canon_guard import validate_state_operation
+from app.services.constitution import _explicit_identity
 
 SNAPSHOT_MODELS = [
     CanonRule, Faction, Character, Location, Item, FactionRelationship,
@@ -89,51 +90,72 @@ async def apply_interpretation(session: AsyncSession, campaign: Campaign, branch
         value = operation.get("value", {})
         visibility = operation.get("visibility", "PLAYER_KNOWN")
         if kind in {"CREATE_CHARACTER", "UPDATE_CHARACTER", "MOVE_CHARACTER", "CHANGE_CHARACTER_STATUS"}:
-            character_name = name or subject
-            if character_name.casefold() in {campaign.protagonist_name.casefold(), "player", "protagonist"}:
-                if kind == "MOVE_CHARACTER":
-                    branch.current_state = {**(branch.current_state or {}), "current_location": str(value.get("location", ""))[:160]}
-                elif kind == "CHANGE_CHARACTER_STATUS":
-                    branch.current_state = {**(branch.current_state or {}), "player_status": str(value.get("status", "alive"))[:32]}
+            character_name = campaign.protagonist_name if (name or subject).casefold() in {
+                campaign.protagonist_name.casefold(), "player", "protagonist", "you",
+            } else (name or subject)
+            if character_name == campaign.protagonist_name:
+                changes = {}
+                if value.get("location"):
+                    changes["current_location"] = str(value["location"])[:160]
+                if value.get("status"):
+                    changes["player_status"] = str(value["status"])[:32]
+                if changes:
+                    branch.current_state = {**(branch.current_state or {}), **changes}
             character = await session.scalar(select(Character).where(
                 Character.campaign_id == campaign.id, Character.branch_id == branch.id,
                 Character.name.ilike(character_name),
-            ))
-            if kind == "CREATE_CHARACTER" and character is None and character_name:
+            )) if character_name else None
+            if character is None and character_name:
                 character = Character(campaign_id=campaign.id, branch_id=branch.id, name=character_name,
                     role=str(value.get("role", ""))[:160], personality=str(value.get("personality", ""))[:2000],
-                    motivations=value.get("motivations", [])[:12], attributes=value.get("attributes", {}), visibility=visibility)
+                    motivations=value.get("motivations", [])[:12] if isinstance(value.get("motivations"), list) else [],
+                    attributes={}, visibility=visibility)
                 session.add(character)
-            elif character:
+                await session.flush()
+            if character:
                 if kind == "CHANGE_CHARACTER_STATUS":
                     character.status = str(value.get("status", character.status))[:32]
-                if kind == "MOVE_CHARACTER":
-                    character.attributes = {**(character.attributes or {}), "location": str(value.get("location", ""))[:160]}
-                if kind == "UPDATE_CHARACTER":
-                    for field in ("role", "personality", "status"):
-                        if field in value:
-                            setattr(character, field, str(value[field])[:2000])
-                    if "motivations" in value:
-                        character.motivations = value["motivations"][:12]
-                    if "attributes" in value and isinstance(value["attributes"], dict):
-                        character.attributes = {**(character.attributes or {}), **value["attributes"]}
+                for field, limit in (("role", 160), ("personality", 2000), ("status", 32)):
+                    if field in value:
+                        setattr(character, field, str(value[field])[:limit])
+                if "motivations" in value and isinstance(value["motivations"], list):
+                    character.motivations = value["motivations"][:12]
+                attributes = value.get("attributes") if isinstance(value.get("attributes"), dict) else {}
+                flat = {key: entry for key, entry in value.items() if key not in {
+                    "role", "personality", "status", "motivations", "attributes",
+                }}
+                if character_name == campaign.protagonist_name:
+                    for identity_field in ("sex", "gender", "pronouns"):
+                        attributes.pop(identity_field, None)
+                        flat.pop(identity_field, None)
+                if attributes or flat:
+                    character.attributes = {**(character.attributes or {}), **attributes, **flat}
         elif kind in {"CREATE_LOCATION", "UPDATE_LOCATION"} and (name or subject):
-            location_name = name or subject
+            if (name or subject).casefold() in {"player", "protagonist", "you", campaign.protagonist_name.casefold()} and not value.get("location"):
+                continue
+            location_name = str(value.get("location") or name or subject)[:160]
+            if {name.casefold(), subject.casefold()} & {"player", "protagonist", "you", campaign.protagonist_name.casefold()}:
+                branch.current_state = {**(branch.current_state or {}), "current_location": location_name}
             location = await session.scalar(select(Location).where(
                 Location.campaign_id == campaign.id, Location.branch_id == branch.id,
                 Location.name.ilike(location_name),
             ))
-            if kind == "CREATE_LOCATION" and location is None:
-                session.add(Location(campaign_id=campaign.id, branch_id=branch.id, name=location_name,
+            if location is None:
+                location = Location(campaign_id=campaign.id, branch_id=branch.id, name=location_name,
                     description=str(value.get("description", ""))[:3000], region=str(value.get("region", ""))[:160],
-                    properties=value.get("properties", {}), visibility=visibility))
-            elif location:
+                    properties={}, visibility=visibility)
+                session.add(location)
+            if location:
                 if "description" in value:
                     location.description = str(value["description"])[:3000]
                 if "region" in value:
                     location.region = str(value["region"])[:160]
-                if "properties" in value:
-                    location.properties = {**(location.properties or {}), **value["properties"]}
+                properties = value.get("properties") if isinstance(value.get("properties"), dict) else {}
+                flat = {key: entry for key, entry in value.items() if key not in {
+                    "location", "description", "region", "properties",
+                }}
+                if properties or flat:
+                    location.properties = {**(location.properties or {}), **properties, **flat}
         elif kind == "ADD_ITEM" and name:
             item = await session.scalar(select(Item).where(Item.campaign_id == campaign.id, Item.branch_id == branch.id, Item.name.ilike(name)))
             if item:
@@ -239,12 +261,43 @@ async def apply_interpretation(session: AsyncSession, campaign: Campaign, branch
             if value.get("label"):
                 next_state["world_time"] = str(value["label"])[:120]
             branch.current_state = next_state
+        elif kind == "UPDATE_MONEY":
+            previous = (branch.current_state or {}).get("money", {})
+            if not isinstance(previous, dict):
+                previous = {}
+            currency = str(value.get("currency") or previous.get("currency") or "").casefold()[:40]
+            amount = value.get("amount")
+            delta = value.get("delta")
+            if isinstance(amount, int) and not isinstance(amount, bool) and currency:
+                money = {"amount": max(0, amount), "currency": currency}
+            elif isinstance(delta, int) and not isinstance(delta, bool) and isinstance(previous.get("amount"), int) and currency == previous.get("currency"):
+                money = {"amount": max(0, previous["amount"] + delta), "currency": currency}
+            else:
+                money = None
+            if money:
+                branch.current_state = {**(branch.current_state or {}), "money": money}
+                protagonist = await session.scalar(select(Character).where(
+                    Character.branch_id == branch.id, Character.name.ilike(campaign.protagonist_name)))
+                if protagonist:
+                    protagonist.attributes = {**(protagonist.attributes or {}), "money": money}
         elif kind in {"ADD_CANON_RULE", "MODIFY_CANON_RULE"} and str(value.get("source", "")).casefold() in {"player_meta", "canon_command", "retcon_command"}:
             session.add(CanonRule(campaign_id=campaign.id, branch_id=branch.id,
                 rule_type=str(value.get("rule_type", "PLAYER_META"))[:64], statement=str(value.get("statement", ""))[:4000],
                 strength=str(value.get("strength", "SOFT"))[:16], exceptions=value.get("exceptions", []), visibility=visibility,
                 source=str(value["source"])[:64]))
         applied.append(operation)
+
+    explicit_identity = _explicit_identity(turn.player_action)
+    if explicit_identity:
+        protagonist = await session.scalar(select(Character).where(
+            Character.branch_id == branch.id, Character.name.ilike(campaign.protagonist_name)))
+        if protagonist:
+            protagonist.attributes = {**(protagonist.attributes or {}), **explicit_identity}
+        constitution = dict(campaign.constitution or {})
+        starting_state = dict(constitution.get("starting_state") or {})
+        starting_state["identity"] = {**(starting_state.get("identity") or {}), **explicit_identity}
+        constitution["starting_state"] = starting_state
+        campaign.constitution = constitution
 
     for change in interpretation.knowledge_changes[:40]:
         person_name = str(change.get("character", change.get("who", ""))).strip()[:120]
@@ -305,6 +358,13 @@ async def apply_interpretation(session: AsyncSession, campaign: Campaign, branch
                 characters=memory.get("characters", [])[:20], locations=memory.get("locations", [])[:20],
                 factions=memory.get("factions", [])[:20], items=memory.get("items", [])[:20],
                 keywords=memory.get("keywords", [])[:30]))
+    if turn.gm_response:
+        session.add(Memory(campaign_id=campaign.id, branch_id=branch.id, source_turn_id=turn.id,
+            memory_type="TURN", content=(f"Player: {turn.player_action[:600]}\n"
+                f"World: {turn.gm_response[:1600]}")[:2200], importance=0.45,
+            confidence=1.0, visibility="PLAYER_KNOWN",
+            characters=[campaign.protagonist_name],
+            locations=[str((branch.current_state or {}).get("current_location", ""))][:1]))
     branch.current_state = {**(branch.current_state or {}), "elapsed_seconds":
         int((branch.current_state or {}).get("elapsed_seconds", 0)) + interpretation.time_elapsed_seconds}
     turn.state_delta = {"operations": applied, "time_elapsed_seconds": interpretation.time_elapsed_seconds}

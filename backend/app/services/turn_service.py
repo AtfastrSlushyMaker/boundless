@@ -63,9 +63,23 @@ def parse_json_response(text: str) -> dict[str, Any]:
 def salvage_interpretation(payload: dict[str, Any]) -> StateInterpretation:
     """Keep independently valid facts when a small model mixes up schema fields."""
     operations = []
-    for candidate in payload.get("state_changes", []) if isinstance(payload.get("state_changes"), list) else []:
+    candidates = payload.get("state_changes", payload.get("operations", []))
+    for candidate in candidates if isinstance(candidates, list) else []:
         if not isinstance(candidate, dict):
             continue
+        candidate = dict(candidate)
+        kind = str(candidate.get("kind", "")).upper()
+        candidate["kind"] = kind
+        value = candidate.get("value")
+        if not isinstance(value, dict):
+            field = {"MOVE_CHARACTER": "location", "UPDATE_LOCATION": "location",
+                     "CHANGE_CHARACTER_STATUS": "status", "CREATE_EVENT": "content",
+                     "CREATE_MEMORY": "content"}.get(kind)
+            candidate["value"] = {field: value} if field and isinstance(value, (str, int, float)) else {}
+        if str(candidate.get("visibility", "")).upper() in {"LOW", "MEDIUM", "HIGH"}:
+            candidate["visibility"] = "PLAYER_KNOWN"
+        if str(candidate.get("certainty", "")).upper() in {"LOW", "MEDIUM", "HIGH"}:
+            candidate["certainty"] = "OBSERVED"
         try:
             operations.append(StateOperation.model_validate(candidate))
         except ValueError:

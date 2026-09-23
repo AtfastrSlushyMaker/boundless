@@ -30,6 +30,8 @@ def _public(row: Any) -> dict[str, Any]:
     return {key: value for key, value in {
         "name": getattr(row, "name", ""), "role": getattr(row, "role", ""),
         "status": getattr(row, "status", ""), "personality": getattr(row, "personality", ""),
+        "attributes": getattr(row, "attributes", {}), "motivations": getattr(row, "motivations", []),
+        "knowledge": getattr(row, "knowledge", []),
         "description": getattr(row, "description", ""), "region": getattr(row, "region", ""),
         "properties": getattr(row, "properties", {}), "owner": getattr(row, "owner_name", ""),
         "quantity": getattr(row, "quantity", None), "condition": getattr(row, "condition", ""),
@@ -84,8 +86,12 @@ async def build_messages(session: AsyncSession, campaign: Campaign, branch_id: U
     memories = list((await session.scalars(select(Memory).where(
         Memory.branch_id == branch_id, Memory.visibility != "GM_ONLY",
     ).order_by(Memory.importance.desc(), Memory.created_at.desc()).limit(160))).all())
-    names = {row.name for row in characters + locations + items + factions}
-    relevant_memories = rank_memories(memories, action, names, limit=8)
+    names = {row.name for row in characters + locations + items + factions if row.name.casefold() in action.casefold()}
+    relevant_memories = rank_memories(memories, action, names, limit=10)
+    recent_memories = list((await session.scalars(select(Memory).where(
+        Memory.branch_id == branch_id, Memory.visibility != "GM_ONLY",
+    ).order_by(Memory.created_at.desc()).limit(4))).all())
+    relevant_memories = list({row.id: row for row in [*recent_memories, *relevant_memories]}.values())[:12]
     summary = await session.scalar(select(CampaignSummary).where(
         CampaignSummary.branch_id == branch_id, CampaignSummary.summary_type == "campaign",
     ))
@@ -96,6 +102,8 @@ async def build_messages(session: AsyncSession, campaign: Campaign, branch_id: U
     canon = {
         "rules": rules,
         "current_state": current_state,
+        "protagonist": next((_public(row) for row in characters if row.name.casefold() == player_name),
+                            {"name": campaign.protagonist_name}),
         "characters": [_public(row) for row in characters if row.name.casefold() != player_name],
         "locations": [_public(row) for row in locations],
         "inventory": [_public(row) for row in items if row.owner_name.casefold() in {player_name, "player"}],
@@ -115,6 +123,7 @@ async def build_messages(session: AsyncSession, campaign: Campaign, branch_id: U
                    "Do not write a list of choices or ask 'What do you do?' The app offers actions separately, "
                    "and the player may still type any action they want.")
     context_block = "\n\nCAMPAIGN CONSTITUTION (authoritative; never summarize away hard_invariants):\n" + json.dumps(constitution, ensure_ascii=False, default=str)
+    context_block += "\n\nWORLD PRESENTATION (soft mood and visual direction):\n" + json.dumps(campaign.theme_profile or {}, ensure_ascii=False, default=str)
     context_block += "\n\nCANONICAL WORLD CONTEXT:\n" + json.dumps(canon, ensure_ascii=False, default=str)
     messages: list[dict[str, str]] = [{"role": "system", "content": system + context_block}]
     for turn in recent:

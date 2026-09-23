@@ -1,4 +1,5 @@
 import json
+import logging
 import platform
 import re
 from datetime import UTC, datetime
@@ -42,6 +43,7 @@ from app.schemas import (
     CampaignCreate,
     CampaignModeUpdate,
     CampaignRename,
+    CampaignThemeUpdate,
     DeepSeekModelsRequest,
     MLXStartRequest,
     ModelSettingsUpdate,
@@ -50,9 +52,10 @@ from app.schemas import (
     TurnEdit,
     WorldEnhanceRequest,
 )
-from app.services.campaign_service import create_campaign
+from app.services.campaign_service import create_campaign, refresh_setup_from_premise
 from app.services.canon_guard import check_narrative
 from app.services.choice_service import suggest_choices
+from app.services.constitution import derive_theme
 from app.services.context_builder import history_for_branch
 from app.services.export_service import export_campaign, import_campaign
 from app.services.meta_commands import apply_meta_command
@@ -63,6 +66,7 @@ from app.services.timeline import fork_branch, rewind_branch
 from app.services.turn_service import _interpret, active_profile, provider_for_profile, stream_turn
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _mlx_supported() -> bool:
@@ -384,6 +388,28 @@ async def update_game_mode(campaign_id: UUID, payload: CampaignModeUpdate,
     return await _detail(session, campaign, branch)
 
 
+@router.put("/campaigns/{campaign_id}/theme")
+async def update_theme(campaign_id: UUID, payload: CampaignThemeUpdate,
+                       branch_id: UUID | None = None, session: AsyncSession = Depends(get_session)):
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    campaign.theme_profile = derive_theme(campaign.original_prompt, campaign.genre,
+                                          campaign.constitution.get("tone", ""),
+                                          payload.theme_family).model_dump(mode="json")
+    campaign.updated_at = datetime.now(UTC)
+    await session.commit()
+    return await _detail(session, campaign, branch)
+
+
+@router.post("/campaigns/{campaign_id}/refresh-setup")
+async def refresh_campaign_setup(campaign_id: UUID, branch_id: UUID | None = None,
+                                 session: AsyncSession = Depends(get_session)):
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    await refresh_setup_from_premise(session, campaign)
+    return await _detail(session, campaign, branch)
+
+
 @router.post("/campaigns/{campaign_id}/archive")
 async def archive_campaign(campaign_id: UUID, archived: bool = True, session: AsyncSession = Depends(get_session)):
     campaign = await _campaign(session, campaign_id)
@@ -483,8 +509,12 @@ async def create_turn(campaign_id: UUID, payload: TurnCreate, request: Request, 
                 yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
                 if event.get("type") == "complete":
                     profile = await active_profile(session)
-                    await update_campaign_summary(session, provider_for_profile(profile), campaign,
-                        branch.id, branch.head_turn_id, int(event.get("turn_index", 0)))
+                    try:
+                        await update_campaign_summary(session, provider_for_profile(profile), campaign,
+                            branch.id, branch.head_turn_id, int(event.get("turn_index", 0)))
+                    except Exception:
+                        await session.rollback()
+                        logger.exception("Campaign summary update failed after a completed turn")
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:600]})}\n\n"
         yield "data: [DONE]\n\n"
