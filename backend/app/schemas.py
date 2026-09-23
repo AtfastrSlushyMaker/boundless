@@ -7,6 +7,11 @@ from pydantic import BaseModel, Field, field_validator
 class CampaignCreate(BaseModel):
     prompt: str = Field(min_length=12, max_length=30_000)
     title: str | None = Field(default=None, max_length=180)
+    game_mode: Literal["freeform", "guided"] = "freeform"
+
+
+class CampaignModeUpdate(BaseModel):
+    game_mode: Literal["freeform", "guided"]
 
 
 class WorldEnhanceRequest(BaseModel):

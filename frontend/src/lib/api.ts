@@ -1,4 +1,5 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+export type GameMode = "freeform" | "guided";
 
 export type Theme = {
   family: "dark_fantasy" | "cyberpunk" | "survival" | "cozy" | "mystery" | "neutral";
@@ -12,6 +13,7 @@ export type CampaignCard = {
   title: string;
   protagonist_name: string;
   genre: string;
+  game_mode: GameMode;
   premise: string;
   current_location: string;
   turn_count: number;
@@ -28,6 +30,7 @@ export type Turn = {
   turn_index: number;
   player_action: string;
   gm_response: string;
+  suggested_actions: string[];
   status: string;
   in_world_time: string;
   created_at: string;
@@ -59,6 +62,7 @@ export type CampaignDetail = {
   theme: Theme;
   protagonist_name: string;
   genre: string;
+  game_mode: GameMode;
   archived: boolean;
   active_branch_id: string;
   branch: Branch;
@@ -125,7 +129,10 @@ export const api = {
   capabilities: () => request<SystemCapabilities>("/api/system/capabilities"),
   campaigns: (archived = false) => request<CampaignCard[]>(`/api/campaigns?include_archived=${archived}`),
   campaign: (id: string, branchId?: string) => request<CampaignDetail>(`/api/campaigns/${id}${branchId ? `?branch_id=${branchId}` : ""}`),
-  createCampaign: (prompt: string) => request<CampaignDetail>("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }) }),
+  createCampaign: (payload: { prompt: string; game_mode: GameMode }) => request<CampaignDetail>("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  setGameMode: (id: string, branchId: string, gameMode: GameMode) => request<CampaignDetail>(`/api/campaigns/${id}/game-mode?branch_id=${branchId}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game_mode: gameMode }),
+  }),
   enhanceWorld: (prompt: string, direction: string) => request<{ prompt: string }>("/api/campaigns/enhance", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, direction }) }),
   renameCampaign: (id: string, title: string) => request(`/api/campaigns/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }) }),
   archiveCampaign: (id: string, archived: boolean) => request(`/api/campaigns/${id}/archive?archived=${archived}`, { method: "POST" }),

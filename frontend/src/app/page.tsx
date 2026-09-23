@@ -150,7 +150,7 @@ export default function HomePage() {
           {!databaseConnected && <span className="offline-note">Database unavailable</span>}
         </footer>
       </section>
-      <CreateWorldDialog open={createOpen} busy={create.isPending} error={create.error?.message} onClose={() => setCreateOpen(false)} onCreate={(prompt) => create.mutate(prompt)} onEnhance={async (prompt, direction) => (await api.enhanceWorld(prompt, direction)).prompt} />
+      <CreateWorldDialog open={createOpen} busy={create.isPending} error={create.error?.message} onClose={() => setCreateOpen(false)} onCreate={(prompt, game_mode) => create.mutate({ prompt, game_mode })} onEnhance={async (prompt, direction) => (await api.enhanceWorld(prompt, direction)).prompt} />
       <ModelSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </main>
   );

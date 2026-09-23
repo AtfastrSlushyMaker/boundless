@@ -40,6 +40,7 @@ from app.llm.openai_compatible import OpenAICompatibleProvider
 from app.schemas import (
     BranchCreate,
     CampaignCreate,
+    CampaignModeUpdate,
     CampaignRename,
     DeepSeekModelsRequest,
     MLXStartRequest,
@@ -51,6 +52,7 @@ from app.schemas import (
 )
 from app.services.campaign_service import create_campaign
 from app.services.canon_guard import check_narrative
+from app.services.choice_service import suggest_choices
 from app.services.context_builder import history_for_branch
 from app.services.export_service import export_campaign, import_campaign
 from app.services.meta_commands import apply_meta_command
@@ -88,6 +90,16 @@ async def _branch(session: AsyncSession, campaign: Campaign, branch_id: UUID | N
     if not branch:
         raise HTTPException(404, "Campaign timeline not found.")
     return branch
+
+
+async def _ensure_branch_choices(session: AsyncSession, campaign: Campaign, branch: Branch) -> None:
+    if campaign.game_mode != "guided" or not branch.head_turn_id:
+        return
+    latest = await session.get(Turn, branch.head_turn_id)
+    if latest and latest.status == "complete" and not latest.suggested_actions:
+        profile = await active_profile(session)
+        latest.suggested_actions = await suggest_choices(
+            provider_for_profile(profile), latest.gm_response, latest.player_action, campaign.protagonist_name)
 
 
 def _model_status(profile: ModelProfile | None) -> dict:
@@ -137,7 +149,7 @@ async def _detail(session: AsyncSession, campaign: Campaign, branch: Branch) -> 
     return jsonable_encoder({
         "id": campaign.id, "title": campaign.title, "original_prompt": campaign.original_prompt,
         "constitution": campaign.constitution, "theme": campaign.theme_profile,
-        "protagonist_name": campaign.protagonist_name, "genre": campaign.genre,
+        "protagonist_name": campaign.protagonist_name, "genre": campaign.genre, "game_mode": campaign.game_mode,
         "archived": campaign.archived, "created_at": campaign.created_at, "updated_at": campaign.updated_at,
         "active_branch_id": campaign.active_branch_id, "branch": branch,
         "branches": branches, "turns": visible_turns, "current_state": branch.current_state,
@@ -301,7 +313,8 @@ async def list_campaigns(include_archived: bool = False, session: AsyncSession =
         last_turn = history[-1] if history else None
         result.append({
             "id": str(campaign.id), "title": campaign.title, "protagonist_name": campaign.protagonist_name,
-            "genre": campaign.genre, "premise": campaign.constitution.get("premise", campaign.original_prompt)[:260],
+            "genre": campaign.genre, "game_mode": campaign.game_mode,
+            "premise": campaign.constitution.get("premise", campaign.original_prompt)[:260],
             "current_location": branch.current_state.get("current_location", "") if branch else "",
             "turn_count": last_turn.turn_index if last_turn else 0,
             "last_played": _utc_iso(last_turn.created_at if last_turn else campaign.updated_at),
@@ -357,6 +370,18 @@ async def rename_campaign(campaign_id: UUID, payload: CampaignRename, session: A
     campaign.updated_at = datetime.now(UTC)
     await session.commit()
     return {"id": str(campaign.id), "title": campaign.title}
+
+
+@router.put("/campaigns/{campaign_id}/game-mode")
+async def update_game_mode(campaign_id: UUID, payload: CampaignModeUpdate,
+                           branch_id: UUID | None = None, session: AsyncSession = Depends(get_session)):
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    campaign.game_mode = payload.game_mode
+    campaign.updated_at = datetime.now(UTC)
+    await _ensure_branch_choices(session, campaign, branch)
+    await session.commit()
+    return await _detail(session, campaign, branch)
 
 
 @router.post("/campaigns/{campaign_id}/archive")
@@ -418,6 +443,7 @@ async def new_branch(campaign_id: UUID, payload: BranchCreate, branch_id: UUID |
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     campaign.active_branch_id = branch.id
+    await _ensure_branch_choices(session, campaign, branch)
     await session.commit()
     return {"id": str(branch.id), "name": branch.name, "parent_branch_id": str(branch.parent_branch_id), "head_turn_id": str(branch.head_turn_id) if branch.head_turn_id else None}
 
@@ -427,6 +453,7 @@ async def activate_branch(campaign_id: UUID, branch_id: UUID, session: AsyncSess
     campaign = await _campaign(session, campaign_id)
     branch = await _branch(session, campaign, branch_id)
     campaign.active_branch_id = branch.id
+    await _ensure_branch_choices(session, campaign, branch)
     await session.commit()
     return {"id": str(branch.id), "name": branch.name}
 
@@ -491,6 +518,8 @@ async def edit_turn(turn_id: UUID, payload: TurnEdit, session: AsyncSession = De
     provider = provider_for_profile(profile)
     interpretation = await _interpret(session, provider, campaign, branch, turn, branch.current_state or {})
     await apply_interpretation(session, campaign, branch, turn, interpretation)
+    turn.suggested_actions = (await suggest_choices(provider, turn.gm_response, turn.player_action,
+                              campaign.protagonist_name)) if campaign.game_mode == "guided" else []
     versions = list((await session.scalars(select(MessageVersion).where(MessageVersion.turn_id == turn.id, MessageVersion.role == "gm"))).all())
     for row in versions:
         row.active = False

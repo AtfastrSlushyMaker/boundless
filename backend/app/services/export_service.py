@@ -117,7 +117,10 @@ async def import_campaign(session: AsyncSession, untrusted: dict) -> Campaign:
         original_prompt=str(old_campaign.get("original_prompt", ""))[:30_000],
         constitution=old_campaign.get("constitution", {}), theme_profile=old_campaign.get("theme_profile", {}),
         protagonist_name=str(old_campaign.get("protagonist_name", "You"))[:120],
-        genre=str(old_campaign.get("genre", "Open world"))[:80], archived=False,
+        genre=str(old_campaign.get("genre", "Open world"))[:80],
+        game_mode=old_campaign.get("game_mode") if isinstance(old_campaign.get("game_mode"), str)
+        and old_campaign.get("game_mode") in {"freeform", "guided"} else "freeform",
+        archived=False,
     )
     session.add(campaign)
     await session.flush()

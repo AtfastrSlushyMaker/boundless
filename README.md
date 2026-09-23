@@ -6,12 +6,14 @@ Boundless is a local-first text role-playing game. Describe a world and a charac
 
 ## What you can do
 
-- Create or enhance a world prompt, then play without fixed dialogue choices.
+- Create or enhance a world prompt, then play by writing your own actions or choosing model-suggested moves.
 - Establish hard campaign rules, including mortality and exceptions, that the Game Master must respect.
 - Stream story turns and keep characters, relationships, inventory, and discovered lore in a persistent campaign.
 - Edit or regenerate narration, rewind to a checkpoint, or branch into another timeline.
 - Rename, archive, duplicate, export, and import campaigns.
 - Use a native Apple Silicon MLX server, Ollama, an OpenAI-compatible endpoint, or hosted DeepSeek. Model selection and health are available in Settings.
+
+At world creation, **How do you want to play?** offers **Write every action** and **Get choices after each scene**. In choice mode, the Game Master suggests up to three actions after each completed scene. Click one to attempt it, or type anything in **Your next action**. The **Play style** select in the game lets you switch modes later. Choices are saved with their turns, so they remain available after refreshing or branching. If a model cannot produce usable choices, freeform input remains available.
 
 ## Quick start with Docker Compose
 

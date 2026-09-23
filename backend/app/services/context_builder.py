@@ -110,6 +110,10 @@ async def build_messages(session: AsyncSession, campaign: Campaign, branch_id: U
         "campaign_summary": summary.content if summary else "",
     }
     system = (PROMPT_DIR / "gm_system.md").read_text(encoding="utf-8")
+    if campaign.game_mode == "guided":
+        system += ("\n\nThis campaign uses choice play. Narrate the scene normally, then stop. "
+                   "Do not write a list of choices or ask 'What do you do?' The app offers actions separately, "
+                   "and the player may still type any action they want.")
     context_block = "\n\nCAMPAIGN CONSTITUTION (authoritative; never summarize away hard_invariants):\n" + json.dumps(constitution, ensure_ascii=False, default=str)
     context_block += "\n\nCANONICAL WORLD CONTEXT:\n" + json.dumps(canon, ensure_ascii=False, default=str)
     messages: list[dict[str, str]] = [{"role": "system", "content": system + context_block}]

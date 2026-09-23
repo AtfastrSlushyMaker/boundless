@@ -4,6 +4,7 @@ import { useReducedMotion, AnimatePresence, motion } from "motion/react";
 import { ArrowUpRight, LoaderCircle, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
+import type { GameMode } from "@/lib/api";
 
 const promptSchema = z.string().trim().min(12, "Give the world a little more to begin with.").max(30_000, "Keep the opening brief under 30,000 characters.");
 const directionSchema = z.string().trim().min(1, "Add a detail or direction for the enhancement.").max(2_000, "Keep the direction under 2,000 characters.");
@@ -13,7 +14,7 @@ type Props = {
   busy: boolean;
   error?: string;
   onClose: () => void;
-  onCreate: (prompt: string) => void;
+  onCreate: (prompt: string, gameMode: GameMode) => void;
   onEnhance: (prompt: string, direction: string) => Promise<string>;
 };
 
@@ -21,6 +22,7 @@ export function CreateWorldDialog({ open, busy, error, onClose, onCreate, onEnha
   const reduceMotion = useReducedMotion();
   const [prompt, setPrompt] = useState("");
   const [direction, setDirection] = useState("");
+  const [gameMode, setGameMode] = useState<GameMode>("freeform");
   const [validation, setValidation] = useState("");
   const [enhanceError, setEnhanceError] = useState("");
   const [enhancing, setEnhancing] = useState(false);
@@ -38,7 +40,7 @@ export function CreateWorldDialog({ open, busy, error, onClose, onCreate, onEnha
     const result = promptSchema.safeParse(prompt);
     if (!result.success) { setValidation(result.error.issues[0].message); return; }
     setValidation("");
-    onCreate(result.data);
+    onCreate(result.data, gameMode);
   };
   const enhance = async () => {
     const premise = promptSchema.safeParse(prompt);
@@ -83,6 +85,14 @@ export function CreateWorldDialog({ open, busy, error, onClose, onCreate, onEnha
                 <span>{enhancing ? "Developing the world" : "Enhance world"}</span>
               </button>
             </div>
+            <label className="world-mode-field" htmlFor="world-game-mode">
+              <span>How do you want to play?</span>
+              <select id="world-game-mode" value={gameMode} onChange={(event) => setGameMode(event.target.value as GameMode)} disabled={locked}>
+                <option value="freeform">Write every action</option>
+                <option value="guided">Get choices after each scene</option>
+              </select>
+              <small>You can switch during the story. You can always type your own action.</small>
+            </label>
             {(validation || enhanceError || error) && <p className="form-message form-message--error" role="alert">{validation || enhanceError || error}</p>}
             <footer className="dialog-actions">
               <button type="button" className="quiet-button" onClick={onClose} disabled={locked}>Back</button>

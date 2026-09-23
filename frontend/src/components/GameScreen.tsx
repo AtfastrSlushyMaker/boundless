@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -14,7 +14,7 @@ import {
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AtlasArtwork } from "@/components/AtlasArtwork";
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
-import { api, CampaignDetail, StreamEvent, streamTurn } from "@/lib/api";
+import { api, CampaignDetail, GameMode, StreamEvent, streamTurn } from "@/lib/api";
 
 const OPENING_ACTION = "Open on the campaign's stated starting moment.";
 type LorePanel = "character" | "people" | "inventory" | "rules" | "journal";
@@ -159,6 +159,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
   const [action, setAction] = useState("");
   const [liveText, setLiveText] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [awaitingStoryRefresh, setAwaitingStoryRefresh] = useState(false);
   const [streamError, setStreamError] = useState("");
   const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
   const [isFollowing, setIsFollowing] = useState(true);
@@ -174,7 +175,22 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
   });
   const campaign = campaignQuery.data;
   const branchId = campaign?.branch.id;
+  const latestTurn = campaign?.turns.at(-1);
+  const latestChoices = latestTurn?.suggested_actions ?? [];
   const modelReady = health.data?.model?.status === "connected";
+
+  const changeGameMode = useMutation({
+    mutationFn: (gameMode: GameMode) => {
+      if (!branchId) throw new Error("Open a campaign before changing its play style.");
+      return api.setGameMode(campaignId, branchId, gameMode);
+    },
+    onSuccess: (detail) => {
+      cache.setQueryData(["campaign", campaignId, requestedBranchId], detail);
+      void cache.invalidateQueries({ queryKey: ["campaigns"] });
+      setNotice("");
+    },
+    onError: (error) => setNotice(error.message),
+  });
 
   const refetchCampaign = useCallback(async () => {
     await cache.invalidateQueries({ queryKey: ["campaign", campaignId] });
@@ -182,7 +198,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
   }, [cache, campaignId]);
 
   const runStream = useCallback(async (storyAction: string, instruction?: string, targetTurnId?: string) => {
-    if (!branchId || generating) return;
+    if (!branchId || generating || changeGameMode.isPending) return;
     const currentRequest = { action: storyAction, instruction, targetTurnId };
     const controller = new AbortController();
     abortRef.current = controller;
@@ -192,7 +208,10 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
         if (event.type === "delta") setLiveText((current) => current + event.text);
         if (event.type === "replace") setLiveText(event.text);
         if (event.type === "error") { setStreamError(event.message); setRetryRequest(currentRequest); setGenerating(false); setLiveText(""); }
-        if (event.type === "complete") { setGenerating(false); setLiveText(""); setRetryRequest(null); void refetchCampaign(); }
+        if (event.type === "complete") {
+          setGenerating(false); setLiveText(""); setRetryRequest(null); setAwaitingStoryRefresh(true);
+          void refetchCampaign().finally(() => setAwaitingStoryRefresh(false));
+        }
       };
       if (targetTurnId) {
         const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000"}/api/turns/${targetTurnId}/regenerate`, {
@@ -221,12 +240,12 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
     } finally {
       setGenerating(false); abortRef.current = null;
     }
-  }, [branchId, campaignId, generating, refetchCampaign]);
+  }, [branchId, campaignId, generating, changeGameMode.isPending, refetchCampaign]);
 
   const sendAction = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = action.trim();
-    if (!trimmed || generating) return;
+    if (!trimmed || generating || changeGameMode.isPending) return;
     setAction("");
     await runStream(trimmed);
   };
@@ -358,6 +377,17 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
                   onError={(message) => setNotice(message)} />
                 <div className="passage-space" aria-hidden="true"><span /></div>
               </article>)}
+              {campaign.game_mode === "guided" && latestChoices.length > 0 && !generating && !awaitingStoryRefresh && <section className="story-choices" aria-label="Suggested next actions">
+                <div className="story-choices-head"><h2>Possible moves</h2><p>Choose one or write your own below.</p></div>
+                <div className="story-choices-list">{latestChoices.map((choice, index) =>
+                  <button type="button" className="story-choice" key={`${index}-${choice}`} disabled={!modelReady || changeGameMode.isPending} onClick={() => { setAction(""); void runStream(choice); }}>
+                    <span className="story-choice-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span><span>{choice}</span>
+                  </button>)}</div>
+              </section>}
+              {campaign.game_mode === "guided" && latestTurn && latestChoices.length === 0 && !generating && !awaitingStoryRefresh &&
+                <div className="story-choices-empty"><span>No choices for this scene. You can write your own action.</span>
+                  <button type="button" className="text-button" disabled={!modelReady || changeGameMode.isPending} onClick={() => changeGameMode.mutate("guided")}>Try suggestions again</button>
+                </div>}
               {liveText && <article className="story-turn story-turn--live"><div className="passage-head"><span>THE WORLD ANSWERS</span><span className="live-mark">WRITING</span></div><div className="gm-prose"><Markdown content={liveText} /></div><span className="stream-caret" aria-hidden="true" /></article>}
               {generating && !liveText && <div className="generation-state"><span className="generation-orbit" aria-hidden="true">B</span><p>Finding what the world does next</p><button className="text-button" onClick={() => abortRef.current?.abort()}><StopCircle size={15} />Stop</button></div>}
               {streamError && <div className="stream-error" role="alert"><CircleAlert size={16} /><p>{streamError}</p>{retryRequest && <button className="text-button" onClick={() => void runStream(retryRequest.action, retryRequest.instruction, retryRequest.targetTurnId)}>Try again</button>}</div>}
@@ -366,14 +396,21 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
           </div>
           {showJump && <button className="jump-latest" onClick={() => { setIsFollowing(true); if (readerRef.current) readerRef.current.scrollTop = readerRef.current.scrollHeight; }}>Jump to latest <ArrowUpRight size={14} /></button>}
           <form className="action-dock" onSubmit={(event) => void sendAction(event)}>
-            <label htmlFor="player-action">Your next action</label>
+            <div className="action-dock-head">
+              <label htmlFor="player-action">Your next action</label>
+              <label className="play-mode-field" htmlFor="play-mode"><span>Play style</span>
+                <select id="play-mode" value={campaign.game_mode} onChange={(event) => changeGameMode.mutate(event.target.value as GameMode)} disabled={generating || changeGameMode.isPending}>
+                  <option value="freeform">Write actions</option><option value="guided">Offer choices</option>
+                </select>
+              </label>
+            </div>
             <div className="action-dock-entry">
               <textarea id="player-action" value={action} onChange={(event) => setAction(event.target.value)} onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void sendAction(event as unknown as FormEvent); }
-              }} placeholder="What do you do?" rows={1} disabled={generating || !modelReady} />
-              {generating ? <button type="button" className="send-button send-button--stop" aria-label="Stop generation" onClick={() => abortRef.current?.abort()}><StopCircle size={18} /></button> : <button type="submit" className="send-button" aria-label="Send action" disabled={!action.trim() || !modelReady}><Send size={17} /></button>}
+              }} placeholder="What do you do?" rows={1} disabled={generating || !modelReady || changeGameMode.isPending} />
+              {generating ? <button type="button" className="send-button send-button--stop" aria-label="Stop generation" onClick={() => abortRef.current?.abort()}><StopCircle size={18} /></button> : <button type="submit" className="send-button" aria-label="Send action" disabled={!action.trim() || !modelReady || changeGameMode.isPending}><Send size={17} /></button>}
             </div>
-            <div className="dock-foot"><span>Enter to act · Shift + Enter for a new line</span><span>{modelReady ? "Free-form action" : "Local model required"}</span></div>
+            <div className="dock-foot"><span>Enter to act · Shift + Enter for a new line</span><span>{changeGameMode.isPending ? "Preparing play style…" : modelReady ? campaign.game_mode === "guided" ? "You can always write your own action" : "Free-form action" : "Model required"}</span></div>
           </form>
         </section>
       </div>

@@ -16,6 +16,7 @@ async def create_campaign(session: AsyncSession, payload: CampaignCreate) -> tup
         title=(payload.title or infer_title(payload.prompt)).strip(),
         original_prompt=payload.prompt.strip(), constitution=constitution.model_dump(mode="json"),
         theme_profile=theme, protagonist_name=constitution.player_identity, genre=constitution.genre,
+        game_mode=payload.game_mode,
     )
     session.add(campaign)
     await session.flush()

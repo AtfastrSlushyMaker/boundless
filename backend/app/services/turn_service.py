@@ -26,6 +26,7 @@ from app.llm.base import LLMProvider, ModelUnavailable
 from app.llm.gateway import get_provider
 from app.schemas import StateInterpretation, StateOperation
 from app.services.canon_guard import CanonViolation, check_narrative
+from app.services.choice_service import suggest_choices
 from app.services.context_builder import build_messages
 from app.services.narration import stream_narration
 from app.services.state_service import apply_interpretation, capture_snapshot
@@ -252,6 +253,8 @@ async def stream_turn(session: AsyncSession, campaign: Campaign, branch: Branch,
         await session.flush()
         interpretation = await _interpret(session, provider, campaign, branch, turn, previous_state)
         await apply_interpretation(session, campaign, branch, turn, interpretation)
+        turn.suggested_actions = (await suggest_choices(provider, turn.gm_response, turn.player_action,
+                                  campaign.protagonist_name)) if campaign.game_mode == "guided" else []
         turn.status = "complete"
         branch.head_turn_id = turn.id
         after = await capture_snapshot(session, branch)
