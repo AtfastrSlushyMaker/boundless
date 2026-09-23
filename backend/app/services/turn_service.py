@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 from copy import deepcopy
 from ipaddress import ip_address
@@ -23,7 +24,7 @@ from app.db.models import (
 )
 from app.llm.base import LLMProvider, ModelUnavailable
 from app.llm.gateway import get_provider
-from app.schemas import StateInterpretation
+from app.schemas import StateInterpretation, StateOperation
 from app.services.canon_guard import CanonViolation, check_narrative
 from app.services.context_builder import build_messages
 from app.services.narration import stream_narration
@@ -31,6 +32,7 @@ from app.services.state_service import apply_interpretation, capture_snapshot
 
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts"
 LENGTH_TOKENS = {"concise": 520, "standard": 1200, "detailed": 1900, "novelistic": 2600}
+logger = logging.getLogger(__name__)
 
 
 def _is_local_endpoint(url: str) -> bool:
@@ -55,6 +57,25 @@ def parse_json_response(text: str) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise ValueError("Structured model output must be a JSON object.")
     return result
+
+
+def salvage_interpretation(payload: dict[str, Any]) -> StateInterpretation:
+    """Keep independently valid facts when a small model mixes up schema fields."""
+    operations = []
+    for candidate in payload.get("state_changes", []) if isinstance(payload.get("state_changes"), list) else []:
+        if not isinstance(candidate, dict):
+            continue
+        try:
+            operations.append(StateOperation.model_validate(candidate))
+        except ValueError:
+            continue
+    cleaned: dict[str, Any] = {"state_changes": operations}
+    for field in ("events", "new_memories", "knowledge_changes", "relationship_changes"):
+        rows = payload.get(field)
+        cleaned[field] = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    elapsed = payload.get("time_elapsed_seconds", 0)
+    cleaned["time_elapsed_seconds"] = elapsed if isinstance(elapsed, int) and 0 <= elapsed <= 31_536_000 else 0
+    return StateInterpretation.model_validate(cleaned)
 
 
 async def active_profile(session: AsyncSession) -> ModelProfile | None:
@@ -116,15 +137,31 @@ async def _interpret(session: AsyncSession, provider: LLMProvider, campaign: Cam
     }
     messages = [{"role": "system", "content": prompt},
                 {"role": "user", "content": json.dumps(request, ensure_ascii=False, default=str)}]
-    raw = await provider.complete_json(messages, temperature=0.1, max_tokens=1300)
+    raw = await provider.complete_json(messages, temperature=0.1, max_tokens=1600)
     try:
         return StateInterpretation.model_validate(parse_json_response(raw))
-    except Exception as first_error:
+    except ValueError as first_error:
         retry = await provider.complete_json(messages + [
             {"role": "assistant", "content": raw},
-            {"role": "user", "content": f"Correct the JSON to match the schema. Validation error: {str(first_error)[:500]}"},
-        ], temperature=0.0, max_tokens=1300)
-        return StateInterpretation.model_validate(parse_json_response(retry))
+            {"role": "user", "content": "Correct the JSON to match the required schema. "
+             "Every state_changes.value must be an object such as {\"location\":\"road\"} or {\"status\":\"injured\"}. "
+             "Visibility must be PLAYER_KNOWN, CHARACTER_KNOWN, WORLD_SECRET, or GM_ONLY; LOW is not valid. "
+             "Drop an operation if you cannot express it safely. Return only the corrected JSON. "
+             f"Validation error: {str(first_error)[:1200]}"},
+        ], temperature=0.0, max_tokens=1800)
+        try:
+            return StateInterpretation.model_validate(parse_json_response(retry))
+        except ValueError as retry_error:
+            for candidate in (retry, raw):
+                try:
+                    result = salvage_interpretation(parse_json_response(candidate))
+                    logger.warning("State interpreter returned invalid operations; kept %d valid changes: %s",
+                                   len(result.state_changes), type(retry_error).__name__)
+                    return result
+                except ValueError:
+                    continue
+            logger.warning("State interpreter returned no usable JSON; saving narration without state changes")
+            return StateInterpretation()
 
 
 async def _repair_canon(provider: LLMProvider, messages: list[dict[str, str]], text: str, violation: str) -> str:

@@ -18,6 +18,7 @@ import { api, CampaignDetail, StreamEvent, streamTurn } from "@/lib/api";
 
 const OPENING_ACTION = "Open on the campaign's stated starting moment.";
 type LorePanel = "character" | "people" | "inventory" | "rules" | "journal";
+type RetryRequest = { action: string; instruction?: string; targetTurnId?: string };
 
 function Markdown({ content }: { content: string }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
@@ -159,6 +160,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
   const [liveText, setLiveText] = useState("");
   const [generating, setGenerating] = useState(false);
   const [streamError, setStreamError] = useState("");
+  const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
   const [isFollowing, setIsFollowing] = useState(true);
   const [showJump, setShowJump] = useState(false);
   const [notice, setNotice] = useState("");
@@ -181,15 +183,16 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
 
   const runStream = useCallback(async (storyAction: string, instruction?: string, targetTurnId?: string) => {
     if (!branchId || generating) return;
+    const currentRequest = { action: storyAction, instruction, targetTurnId };
     const controller = new AbortController();
     abortRef.current = controller;
-    setGenerating(true); setStreamError(""); setNotice(""); setLiveText("");
+    setGenerating(true); setStreamError(""); setNotice(""); setLiveText(""); setRetryRequest(null);
     try {
       const onEvent = (event: StreamEvent) => {
         if (event.type === "delta") setLiveText((current) => current + event.text);
         if (event.type === "replace") setLiveText(event.text);
-        if (event.type === "error") { setStreamError(event.message); setGenerating(false); setLiveText(""); }
-        if (event.type === "complete") { setGenerating(false); setLiveText(""); void refetchCampaign(); }
+        if (event.type === "error") { setStreamError(event.message); setRetryRequest(currentRequest); setGenerating(false); setLiveText(""); }
+        if (event.type === "complete") { setGenerating(false); setLiveText(""); setRetryRequest(null); void refetchCampaign(); }
       };
       if (targetTurnId) {
         const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000"}/api/turns/${targetTurnId}/regenerate`, {
@@ -211,7 +214,10 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
         await streamTurn(campaignId, { action: storyAction, branch_id: branchId, instruction }, onEvent, controller.signal);
       }
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError")) setStreamError(error instanceof Error ? error.message : "Generation failed.");
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setStreamError(error instanceof Error ? error.message : "Generation failed.");
+        setRetryRequest(currentRequest);
+      }
     } finally {
       setGenerating(false); abortRef.current = null;
     }
@@ -354,7 +360,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
               </article>)}
               {liveText && <article className="story-turn story-turn--live"><div className="passage-head"><span>THE WORLD ANSWERS</span><span className="live-mark">WRITING</span></div><div className="gm-prose"><Markdown content={liveText} /></div><span className="stream-caret" aria-hidden="true" /></article>}
               {generating && !liveText && <div className="generation-state"><span className="generation-orbit" aria-hidden="true">B</span><p>Finding what the world does next</p><button className="text-button" onClick={() => abortRef.current?.abort()}><StopCircle size={15} />Stop</button></div>}
-              {streamError && <div className="stream-error" role="alert"><CircleAlert size={16} /><p>{streamError}</p><button className="text-button" onClick={() => { setStreamError(""); if (campaign.turns.length === 0) { startedOpening.current = true; void runStream(OPENING_ACTION); } }}>Try again</button></div>}
+              {streamError && <div className="stream-error" role="alert"><CircleAlert size={16} /><p>{streamError}</p>{retryRequest && <button className="text-button" onClick={() => void runStream(retryRequest.action, retryRequest.instruction, retryRequest.targetTurnId)}>Try again</button>}</div>}
               {notice && <p className="notice-line notice-line--error" role="status">{notice}</p>}
             </div>
           </div>
