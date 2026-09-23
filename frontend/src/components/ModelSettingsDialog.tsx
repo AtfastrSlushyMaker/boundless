@@ -55,6 +55,7 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
   const form = draft ?? query.data ?? initial;
   const setForm = (update: (value: ModelSettings) => ModelSettings) => setDraft(update(form));
   const mlxSupported = capabilities.data?.mlx_supported ?? false;
+  const mlxDefaultEndpoint = capabilities.data?.mlx_default_base_url ?? initial.base_url;
   const isLocalModel = form.provider === "mlx" || form.provider === "ollama" || (
     form.provider === "openai-compatible" && isLoopbackEndpoint(form.base_url)
   );
@@ -79,6 +80,14 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
     staleTime: 30_000,
   });
   const installedModels = ollamaModels.data?.models ?? [];
+  const mlxModels = useQuery({
+    queryKey: ["mlx-models", form.base_url],
+    queryFn: () => api.compatibleModels(form.base_url),
+    enabled: open && form.provider === "mlx" && mlxSupported,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const availableMlxModels = mlxModels.data?.models ?? [];
   const selectedOllamaModel = installedModels.find((name) => name.toLowerCase() === form.model.toLowerCase()) ?? form.model;
   const deepseekModels = useQuery({
     queryKey: ["deepseek-models", query.data?.api_key_configured],
@@ -134,7 +143,7 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
               const provider = event.target.value as ModelSettings["provider"];
               setEditModelId(false);
               const saved = query.data?.provider === provider ? query.data : null;
-              const endpoint = saved?.base_url ?? (provider === "mlx" ? "http://127.0.0.1:8088/v1" : provider === "ollama" ? "http://127.0.0.1:11434" : provider === "deepseek" ? "https://api.deepseek.com" : "http://127.0.0.1:1234/v1");
+              const endpoint = saved?.base_url ?? (provider === "mlx" ? mlxDefaultEndpoint : provider === "ollama" ? "http://127.0.0.1:11434" : provider === "deepseek" ? "https://api.deepseek.com" : "http://127.0.0.1:1234/v1");
               const model = saved?.model ?? (provider === "mlx" ? "lukey03/Qwen3.5-9B-abliterated-MLX-4bit" : provider === "ollama" ? "" : provider === "deepseek" ? "deepseek-flash" : "your-model-id");
               setForm((value) => ({ ...value, provider, base_url: endpoint, model }));
             }}>
@@ -150,7 +159,15 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
             <span>Endpoint</span>
             <input value={form.base_url} onChange={(event) => setForm((value) => ({ ...value, base_url: event.target.value }))} spellCheck={false} readOnly={form.provider === "deepseek"} required />
           </label>
-          {form.provider === "ollama" ? <div className="model-field">
+          {form.provider === "mlx" && availableMlxModels.length > 0 ? <div className="model-field">
+            <label>
+              <span>Loaded MLX model</span>
+              <select value={form.model} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} required>
+                {form.model && !availableMlxModels.includes(form.model) && <option value={form.model}>{form.model} · saved selection</option>}
+                {availableMlxModels.map((name) => <option value={name} key={name}>{name}</option>)}
+              </select>
+            </label>
+          </div> : form.provider === "ollama" ? <div className="model-field">
             <label>
               <span>Installed Ollama model</span>
               <select value={selectedOllamaModel} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} required>
@@ -194,6 +211,8 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
           </div> : <label>
             <span>Model identifier</span>
             <input value={form.model} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} spellCheck={false} required />
+            {form.provider === "mlx" && mlxModels.isError && <span className="field-help field-help--error">Could not reach the MLX server. Start it on your Mac, then check again.</span>}
+            {form.provider === "mlx" && <button type="button" className="text-button model-refresh" disabled={mlxModels.isFetching} onClick={() => void mlxModels.refetch()}>{mlxModels.isFetching ? "Loading model…" : "Load model from endpoint"}</button>}
             {form.provider === "openai-compatible" && <>
               <button type="button" className="text-button model-refresh" disabled={compatibleModels.isFetching} onClick={() => void compatibleModels.refetch()}>{compatibleModels.isFetching ? "Loading models…" : "Load models from endpoint"}</button>
               {compatibleModels.isError && <span className="field-help field-help--error">{compatibleModels.error.message}</span>}
@@ -222,7 +241,7 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
             <span className="range-ends"><span>Steady</span><span>Surprising</span></span>
           </label>}
           {form.provider === "mlx" && !mlxSupported && <p className="form-message form-message--error" role="alert">MLX is supported only on Apple Silicon Macs. Choose another runtime for this device.</p>}
-          <p className="form-note">{form.provider === "deepseek" ? <>DeepSeek is hosted. World prompts, enhancement requests, and campaign context are sent to its API. Your key stays in a local secret file and is never added to exports.</> : form.provider === "openai-compatible" && !isLocalModel ? <>This API endpoint is remote. Prompts, enhancements, and campaign context are sent there when you generate.</> : <>Prompts are sent to the model endpoint shown above. Your DeepSeek key is stored locally and used only when DeepSeek is selected.</>}</p>
+          <p className="form-note">{form.provider === "deepseek" ? <>DeepSeek is hosted. World prompts, enhancement requests, and campaign context are sent to its API. Your key stays in a local secret file and is never added to exports.</> : form.provider === "openai-compatible" && !isLocalModel ? <>This API endpoint is remote. Prompts, enhancements, and campaign context are sent there when you generate.</> : <>Prompts are sent to the local model endpoint shown above.</>}</p>
           {message && <p className="form-message" role="status">{message}</p>}
           </div>
           <footer className="dialog-actions">

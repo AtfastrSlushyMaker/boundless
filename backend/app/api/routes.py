@@ -33,7 +33,7 @@ from app.db.models import (
 )
 from app.db.session import get_session
 from app.llm.base import ModelUnavailable
-from app.llm.gateway import DeepSeekProvider
+from app.llm.gateway import DeepSeekProvider, mlx_base_url
 from app.llm.ollama import OllamaProvider
 from app.llm.openai_compatible import OpenAICompatibleProvider
 from app.schemas import (
@@ -61,7 +61,10 @@ router = APIRouter()
 
 
 def _mlx_supported() -> bool:
-    return platform.system() == "Darwin" and platform.machine().casefold() in {"arm64", "aarch64"}
+    apple_silicon = platform.machine().casefold() in {"arm64", "aarch64"}
+    return apple_silicon and (platform.system() == "Darwin" or (
+        platform.system() == "Linux" and settings.host_mlx_supported
+    ))
 
 
 def _utc_iso(value):
@@ -87,7 +90,8 @@ async def _branch(session: AsyncSession, campaign: Campaign, branch_id: UUID | N
 def _model_status(profile: ModelProfile | None) -> dict:
     if not profile:
         return {"provider": "mlx", "model": "lukey03/Qwen3.5-9B-abliterated-MLX-4bit", "status": "not_configured"}
-    return {"provider": profile.provider, "model": profile.model, "base_url": profile.base_url,
+    return {"provider": profile.provider, "model": profile.model,
+            "base_url": mlx_base_url(profile.base_url) if profile.provider == "mlx" else profile.base_url,
             "context_window": profile.context_window, "response_length": profile.response_length,
             "temperature": profile.temperature}
 
@@ -167,7 +171,7 @@ async def health(session: AsyncSession = Depends(get_session)):
 
 @router.get("/system/capabilities")
 async def system_capabilities():
-    return {"mlx_supported": _mlx_supported()}
+    return {"mlx_supported": _mlx_supported(), "mlx_default_base_url": mlx_base_url()}
 
 
 @router.get("/settings/ollama/models")
@@ -225,7 +229,7 @@ async def write_model_settings(payload: ModelSettingsUpdate, session: AsyncSessi
         session.add(profile)
     profile.name = "DeepSeek" if payload.provider == "deepseek" else "Custom" if payload.provider == "openai-compatible" else payload.provider.title()
     profile.provider = payload.provider
-    profile.base_url = payload.base_url
+    profile.base_url = mlx_base_url(payload.base_url) if payload.provider == "mlx" else payload.base_url
     profile.model = payload.model.strip()
     profile.context_window = payload.context_window
     profile.response_length = payload.response_length

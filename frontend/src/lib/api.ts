@@ -91,7 +91,7 @@ export type ModelSettings = {
   api_key_configured?: boolean;
 };
 
-export type SystemCapabilities = { mlx_supported: boolean };
+export type SystemCapabilities = { mlx_supported: boolean; mlx_default_base_url: string };
 
 export type StreamEvent =
   | { type: "delta"; text: string; turn_id: string }

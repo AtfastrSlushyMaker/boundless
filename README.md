@@ -45,7 +45,8 @@ docker compose down
 | Ollama, Docker API | Your computer | `http://host.docker.internal:11434` |
 | OpenAI-compatible server, native app | Your computer or another host | The server's `/v1` base URL |
 | OpenAI-compatible server, Docker API | A reachable host | A URL reachable from the container, often `http://host.docker.internal:8080/v1` |
-| MLX | Apple Silicon macOS, native API only | `http://127.0.0.1:8088/v1` |
+| MLX, native API | Apple Silicon Mac | `http://127.0.0.1:8088/v1` |
+| MLX, Docker API | Apple Silicon Mac host | `http://host.docker.internal:8088/v1` |
 
 For Ollama, install and start it on the host, then download a model such as [`qwen3.5:9b`](https://ollama.com/library/qwen3.5):
 
@@ -57,7 +58,13 @@ Ollama's model dropdown reads installed names from `/api/tags`. If the Docker AP
 
 For `llama.cpp`, start its OpenAI-compatible HTTP server with a model you already have, then choose **OpenAI-compatible API** in Settings. Use a loopback `/v1` URL when both Boundless and the model server run natively; use a container-reachable host URL for the Docker API. Boundless loads available model IDs from the server's `/models` endpoint. [llama.cpp server documentation](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
 
-MLX is available only when the API runs natively on an Apple Silicon Mac. Docker runs the API in Linux, so the MLX choice is disabled there. Run the native workflow below to use MLX.
+MLX inference still runs on the Apple Silicon host when Boundless runs in Docker. Set `HOST_MLX_SUPPORTED=true` in your ignored `.env`, then restart the API with `docker compose up -d --build api`. Start `mlx_lm.server` on the Mac using the local model path below. In Model settings, choose **Apple Silicon · MLX**; Docker uses `http://host.docker.internal:8088/v1` automatically. The loaded model dropdown reads `/v1/models` from your MLX server. On other hosts, the MLX choice stays unavailable.
+
+```bash
+mlx_lm.server --model ~/.local/share/boundless/models/qwen3.5-9b-abliterated-mlx-4bit --host 127.0.0.1 --port 8088
+```
+
+If the container cannot reach a server bound to host loopback, bind the MLX server to a host interface reachable by Docker and keep that listener on a trusted local network. A successful `mlx_lm.generate` command confirms the model weights work, but the app also needs the HTTP server running.
 
 ### Native development and Apple MLX
 
@@ -98,7 +105,7 @@ The native `.env.example` defaults to the MLX model. Change `LLM_PROVIDER`, `LLM
 
 ## Configuration and data
 
-Copy [.env.example](.env.example) for local configuration. Docker Compose uses `COMPOSE_LLM_PROVIDER`, `COMPOSE_LLM_BASE_URL`, and `COMPOSE_LLM_MODEL` so its Linux API can default to Ollama while native macOS development can default to MLX. `APP_PORT`, `FRONTEND_PORT`, and `POSTGRES_PORT` control host ports. Changing `APP_PORT` requires rebuilding the web image because the browser API URL is compiled into the Next.js build.
+Copy [.env.example](.env.example) for local configuration. Docker Compose uses `COMPOSE_LLM_PROVIDER`, `COMPOSE_LLM_BASE_URL`, and `COMPOSE_LLM_MODEL` so its Linux API can default to Ollama while native macOS development can default to MLX. Set `HOST_MLX_SUPPORTED=true` only on an Apple Silicon Mac; `MLX_HOST_BASE_URL` controls the Docker-reachable MLX endpoint. `APP_PORT`, `FRONTEND_PORT`, and `POSTGRES_PORT` control host ports. Changing `APP_PORT` requires rebuilding the web image because the browser API URL is compiled into the Next.js build.
 
 Database records live in the Compose `postgres_data` volume. A DeepSeek key entered through Docker Model settings is saved with owner-only permissions in the `api_secrets` volume. A key entered through the native API is saved in the ignored `.secrets/deepseek_api_key` file. These are separate stores, so enter the key once in each environment you use. Keys are not included in campaign exports. A hosted provider receives the campaign context required for generation; a local provider keeps generation on the configured local endpoint.
 
@@ -139,7 +146,8 @@ The integration tests use local PostgreSQL and remove campaigns they create. `ma
 | `api` will not start | Run `docker compose ps` and `docker compose logs migrate api`. The migration step waits for a healthy database. |
 | Port already in use | Set `APP_PORT`, `FRONTEND_PORT`, or `POSTGRES_PORT` in `.env`; rebuild the web image after changing `APP_PORT`. |
 | Model offline | Check the endpoint in Model settings from the API's point of view. `127.0.0.1` inside a container refers to that container, not the host. |
-| MLX unavailable in Docker | Use the native macOS API workflow above. MLX is intentionally disabled in the Linux API image. |
+| MLX unavailable in Docker | On an Apple Silicon Mac, set `HOST_MLX_SUPPORTED=true` in `.env` and recreate the API. On other hosts MLX remains unavailable. |
+| MLX selected but offline | Start `mlx_lm.server` on the Mac, then use **Check again** in Model settings. The CLI generation command alone does not start the HTTP server. |
 | DeepSeek key missing after switching to Docker | Re-enter the key in Docker Model settings; its named volume is separate from the native `.secrets` folder. |
 | Campaigns seem missing | Confirm that the same Compose project and `postgres_data` volume are in use. `docker compose down` retains it; `down -v` removes it. |
 

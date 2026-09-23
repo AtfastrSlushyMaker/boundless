@@ -1,5 +1,7 @@
 import asyncio
+import platform
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -12,6 +14,18 @@ from app.llm.openai_compatible import OpenAICompatibleProvider
 _ready_models: set[tuple[str, str]] = set()
 _probe_tasks: dict[tuple[str, str], asyncio.Task[bool]] = {}
 _retry_after: dict[tuple[str, str], float] = {}
+
+
+def mlx_base_url(base_url: str | None = None) -> str:
+    """Map a host MLX server's loopback address to Docker's host gateway."""
+    endpoint = base_url or (settings.mlx_host_base_url if settings.host_mlx_supported else "http://127.0.0.1:8088/v1")
+    if platform.system() != "Linux" or not settings.host_mlx_supported:
+        return endpoint
+    parsed = urlsplit(endpoint)
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return endpoint
+    gateway = urlsplit(settings.mlx_host_base_url)
+    return urlunsplit((parsed.scheme, gateway.netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 class MLXProvider(OpenAICompatibleProvider):
@@ -84,7 +98,7 @@ def get_provider(provider: str | None = None, base_url: str | None = None, model
     if kind == "ollama":
         return OllamaProvider(base_url=base_url or settings.llm_base_url, model=model or settings.llm_model)
     if kind == "mlx":
-        return MLXProvider(base_url=base_url or settings.llm_base_url, model=model or settings.llm_model)
+        return MLXProvider(base_url=mlx_base_url(base_url or settings.llm_base_url), model=model or settings.llm_model)
     if kind == "deepseek":
         return DeepSeekProvider(model=model or "deepseek-flash")
     return OpenAICompatibleProvider(base_url=base_url or settings.llm_base_url, model=model or settings.llm_model)
