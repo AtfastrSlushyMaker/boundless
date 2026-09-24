@@ -5,7 +5,12 @@ import json
 import pytest
 
 from app.db.models import Faction
-from app.services.affiliations import infer_from_text, kind_for, merge_affiliations, normalize_affiliations
+from app.services.affiliations import (
+    infer_from_text,
+    kind_for,
+    merge_affiliations,
+    normalize_affiliations,
+)
 from tests.conftest import detail, new_campaign, play
 from tests.test_state_pipeline import op
 

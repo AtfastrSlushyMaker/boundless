@@ -1119,6 +1119,23 @@ async def edit_turn(turn_id: UUID, payload: TurnEdit, session: AsyncSession = De
         raise HTTPException(404, "Turn not found.")
     campaign = await _campaign(session, turn.campaign_id)
     branch = await _branch(session, campaign, turn.branch_id)
+    if payload.wording_only:
+        # A correction to the prose only: no state is re-read, and later turns stay in the story.
+        violation = check_narrative(payload.content, campaign.constitution, [
+            {"rule_type": row.rule_type, "strength": row.strength, "exceptions": row.exceptions}
+            for row in (await session.scalars(select(CanonRule).where(CanonRule.campaign_id == campaign.id))).all()
+        ])
+        if violation:
+            raise HTTPException(422, violation)
+        turn.gm_response = payload.content.strip()
+        versions = list((await session.scalars(select(MessageVersion).where(MessageVersion.turn_id == turn.id, MessageVersion.role == "gm"))).all())
+        for row in versions:
+            row.active = False
+        session.add(MessageVersion(turn_id=turn.id, role="gm", version=max((row.version for row in versions), default=0) + 1,
+                                   content=turn.gm_response, active=True))
+        turn.diagnostics = {**(turn.diagnostics or {}), "edited": True, "wording_only": True}
+        await session.commit()
+        return await _detail(session, campaign, branch)
     before = await session.scalar(select(Checkpoint).where(
         Checkpoint.branch_id == branch.id, Checkpoint.turn_id == turn.id,
         Checkpoint.turn_index < turn.turn_index).order_by(Checkpoint.created_at.desc()))

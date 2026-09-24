@@ -38,3 +38,14 @@ async def test_notes_round_trip_and_pinned_notes_reach_the_narrator(client, scri
 
     assert (await client.delete(f"{base}/{note['id']}")).status_code == 204
     assert (await client.get(base)).json()["notes"] == []
+
+
+@pytest.mark.asyncio
+async def test_wording_only_edit_keeps_later_turns(client, scripted):
+    campaign = await new_campaign(client, "My name is Ada, a courier in the harbor city of Ost.")
+    first = await play(client, campaign, "I look for the harbor master.")
+    await play(client, campaign, "I wait by the docks.")
+    response = await client.patch(f"/api/turns/{first['turn_id']}", json={"content": "The harbor is fog and rope.", "wording_only": True})
+    assert response.status_code == 200, response.text
+    turns = response.json()["turns"]
+    assert len(turns) == 2 and turns[0]["gm_response"] == "The harbor is fog and rope."

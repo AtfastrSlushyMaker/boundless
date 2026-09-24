@@ -288,7 +288,7 @@ export const api = {
   createBranch: (id: string, name: string, branchId: string, turnId?: string) => request<{ id: string; name: string }>(`/api/campaigns/${id}/branches?branch_id=${branchId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, turn_id: turnId }) }),
   activateBranch: (id: string, branchId: string) => request(`/api/campaigns/${id}/branches/${branchId}/activate`, { method: "POST" }),
   rewind: (id: string, branchId: string, turnId: string) => request<CampaignDetail>(`/api/campaigns/${id}/rewind?branch_id=${branchId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turn_id: turnId }) }),
-  editTurn: (turnId: string, content: string) => request<CampaignDetail>(`/api/turns/${turnId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }),
+  editTurn: (turnId: string, content: string, wordingOnly = false) => request<CampaignDetail>(`/api/turns/${turnId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content, wording_only: wordingOnly }) }),
   settings: () => request<ModelSettings>("/api/settings/model"),
   imageSettings: () => request<ImageSettings>("/api/settings/images"),
   saveImageSettings: (settings: ImageSettings) => request<ImageSettings>("/api/settings/images", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) }),

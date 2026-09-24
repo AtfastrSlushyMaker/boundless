@@ -9,7 +9,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowLeft, ArrowUpRight, Backpack, CheckCircle2, ChevronDown, CircleAlert, Clock3, Flag, GitBranch,
-  Bookmark, Map, Menu, MessageSquareText, Moon, NotebookPen, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw,
+  Map, Menu, MessageSquareText, Moon, NotebookPen, PanelLeftClose, PanelLeftOpen,
   ScrollText, Send, Settings2, Shield, Sparkles, StopCircle, Sun, Sunrise, Sunset, Users, X,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +19,7 @@ import { CampaignHealth } from "@/components/CampaignHealth";
 import { GenerationProgress } from "@/components/GenerationProgress";
 import { faceCrop, PortraitButton } from "@/components/PortraitLightbox";
 import { ProfileList } from "@/components/LivingProfile";
+import { TurnActions } from "@/components/TurnActions";
 import { NotebookPanel } from "@/components/NotebookPanel";
 import { PeoplePanel } from "@/components/PeoplePanel";
 import { SchemeToggle } from "@/components/SchemeToggle";
@@ -98,109 +99,6 @@ type RetryRequest = { action: string; instruction?: string; targetTurnId?: strin
 
 function Markdown({ content }: { content: string }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
-}
-
-function MemoryActionMenu({ campaign, turnId, branchId, content, onChanged, onError }: {
-  campaign: CampaignDetail; turnId: string; branchId: string; content: string;
-  onChanged: (detail: CampaignDetail) => void; onError: (message: string) => void;
-}) {
-  const reduceMotion = useReducedMotion();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(content);
-  const [busy, setBusy] = useState(false);
-  const [promptDialog, setPromptDialog] = useState<{ kind: "rewrite" | "branch"; value: string } | null>(null);
-  useEffect(() => {
-    if (!promptDialog || busy) return;
-    const onKey = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setPromptDialog(null); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [promptDialog, busy]);
-  const save = async () => {
-    setBusy(true); onError("");
-    try { onChanged(await api.editTurn(turnId, draft)); setEditing(false); }
-    catch (error) { onError(error instanceof Error ? error.message : "The edit could not be saved."); }
-    finally { setBusy(false); }
-  };
-  const client = useQueryClient();
-  const [saved, setSaved] = useState(false);
-  const savePassage = async () => {
-    const selection = typeof window !== "undefined" ? window.getSelection()?.toString().trim() ?? "" : "";
-    const quote = (selection && content.includes(selection.slice(0, 40)) ? selection : content).slice(0, 3900);
-    try {
-      await api.createNote(campaign.id, branchId, { quote, turn_id: turnId, tag: "quote" });
-      setSaved(true);
-      void client.invalidateQueries({ queryKey: ["notes", campaign.id] });
-      window.setTimeout(() => setSaved(false), 2400);
-    } catch (error) { onError(error instanceof Error ? error.message : "The passage could not be saved."); }
-  };
-  const regenerate = () => setPromptDialog({ kind: "rewrite", value: "" });
-  const rewind = () => {
-    if (!window.confirm("Return this timeline to the end of this turn? Later turns remain in the archive but leave the active story.")) return;
-    window.dispatchEvent(new CustomEvent("boundless:rewind", { detail: { turnId, branchId } }));
-  };
-  const fork = () => setPromptDialog({ kind: "branch", value: "What if…" });
-  const submitPrompt = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!promptDialog) return;
-    const value = promptDialog.value.trim();
-    if (promptDialog.kind === "rewrite") {
-      window.dispatchEvent(new CustomEvent("boundless:regenerate", { detail: { turnId, instruction: value, branchId } }));
-      setPromptDialog(null);
-      return;
-    }
-    if (!value) return;
-    setBusy(true);
-    try {
-      const branch = await api.createBranch(campaign.id, value, branchId, turnId);
-      await api.activateBranch(campaign.id, branch.id);
-      window.dispatchEvent(new CustomEvent("boundless:branch", { detail: { branchId: branch.id } }));
-      setPromptDialog(null);
-    } catch (error) { onError(error instanceof Error ? error.message : "The branch could not be created."); }
-    finally { setBusy(false); }
-  };
-
-  if (editing) return <div className="edit-narration">
-    <label htmlFor={`edit-${turnId}`}>Revise the Game Master&apos;s narration</label>
-    <textarea id={`edit-${turnId}`} value={draft} onChange={(event) => setDraft(event.target.value)} rows={Math.min(14, Math.max(5, draft.split("\n").length + 2))} />
-    <div className="edit-actions"><button className="quiet-button" onClick={() => { setDraft(content); setEditing(false); }}>Cancel</button><button className="primary-button" onClick={() => void save()} disabled={busy}>{busy ? "Rebuilding state…" : "Save version"}</button></div>
-  </div>;
-
-  return <>
-    <div className="turn-tools" aria-label="Narration actions">
-      <button className="tool-button" aria-label="Edit narration" title="Edit narration" disabled={busy} onClick={() => { setDraft(content); setEditing(true); }}><Pencil size={15} /><span>Edit</span></button>
-      <button className="tool-button" aria-label="Regenerate narration" title="Regenerate" disabled={busy} onClick={regenerate}><RotateCcw size={15} /><span>Rewrite</span></button>
-      <button className="tool-button" aria-label="Branch from this turn" title="Branch from here" disabled={busy} onClick={fork}><GitBranch size={15} /><span>Branch</span></button>
-      <button className="tool-button" aria-label="Rewind to this turn" title="Rewind to this turn" disabled={busy} onClick={rewind}><ArrowLeft size={15} /><span>Rewind</span></button>
-      <button className={`tool-button${saved ? " is-done" : ""}`} aria-label="Save passage to notebook" title="Save to notebook (saves your selection, or the passage)" disabled={busy || saved} onClick={() => void savePassage()}>
-        <Bookmark size={15} /><span>{saved ? "Saved" : "Save"}</span></button>
-    </div>
-    <AnimatePresence initial={false}>
-      {promptDialog && <motion.div key={`${promptDialog.kind}-${turnId}`} className="dialog-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setPromptDialog(null); }}
-        initial={false} exit={{ y: reduceMotion ? 0 : 6 }} transition={{ duration: reduceMotion ? 0 : 0.16, ease: "easeOut" }}>
-        <motion.section className="prompt-dialog" role="dialog" aria-modal="true" aria-labelledby={`turn-prompt-title-${turnId}`}
-          initial={{ y: reduceMotion ? 0 : 12 }} animate={{ y: 0 }} exit={{ y: reduceMotion ? 0 : 8 }}
-          transition={{ duration: reduceMotion ? 0 : 0.2, ease: "easeOut" }}>
-          <header className="dialog-head">
-            <div><p className="section-overline">{promptDialog.kind === "rewrite" ? "REVISE THIS MOMENT" : "A DIFFERENT TIMELINE"}</p>
-              <h2 id={`turn-prompt-title-${turnId}`}>{promptDialog.kind === "rewrite" ? "Rewrite this passage" : "Name the branch"}</h2></div>
-            <button className="icon-button" aria-label="Close" onClick={() => setPromptDialog(null)} disabled={busy}><X size={18} /></button>
-          </header>
-          <p className="create-lead">{promptDialog.kind === "rewrite" ? "Add an optional direction for the next version. Leave it blank for a fresh take." : "This timeline starts from the selected turn. Give the possibility a name."}</p>
-          <form onSubmit={(event) => void submitPrompt(event)}>
-            <label className="prompt-field-label" htmlFor={`turn-prompt-${turnId}`}>{promptDialog.kind === "rewrite" ? "Direction for the rewrite" : "Timeline name"}</label>
-            {promptDialog.kind === "rewrite" ? <textarea id={`turn-prompt-${turnId}`} autoFocus rows={4} maxLength={2_000} value={promptDialog.value} onChange={(event) => setPromptDialog({ kind: "rewrite", value: event.target.value })} placeholder="Keep the same scene, but let the envoy reveal why she came…" disabled={busy} /> : <input id={`turn-prompt-${turnId}`} autoFocus maxLength={120} value={promptDialog.value} onChange={(event) => setPromptDialog({ kind: "branch", value: event.target.value })} disabled={busy} />}
-            <footer className="dialog-actions">
-              <button type="button" className="quiet-button" onClick={() => setPromptDialog(null)} disabled={busy}>Cancel</button>
-              <button type="submit" className="primary-button" disabled={busy || (promptDialog.kind === "branch" && !promptDialog.value.trim())}>
-                {promptDialog.kind === "rewrite" ? <RotateCcw size={15} /> : <GitBranch size={15} />}
-                <span>{busy ? "Creating branch" : promptDialog.kind === "rewrite" ? "Rewrite turn" : "Create branch"}</span>
-              </button>
-            </footer>
-          </form>
-        </motion.section>
-      </motion.div>}
-    </AnimatePresence>
-  </>;
 }
 
 function profileOf(campaign: CampaignDetail): PlayerProfile | null {
@@ -508,10 +406,16 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
       const detail = (event as CustomEvent<{ branchId: string }>).detail;
       router.replace(`/campaign/${campaignId}?branch=${detail.branchId}`);
     };
+    const openPanel = (event: Event) => {
+      const detail = (event as CustomEvent<{ panel: LorePanel }>).detail;
+      setPanel(detail.panel); setSidebarOpen(true); setMobileNavOpen(true);
+    };
+    window.addEventListener("boundless:open-panel", openPanel);
     window.addEventListener("boundless:regenerate", regenerate);
     window.addEventListener("boundless:rewind", rewind);
     window.addEventListener("boundless:branch", branch);
     return () => {
+      window.removeEventListener("boundless:open-panel", openPanel);
       window.removeEventListener("boundless:regenerate", regenerate);
       window.removeEventListener("boundless:rewind", rewind);
       window.removeEventListener("boundless:branch", branch);
@@ -623,7 +527,8 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
                 {turn.player_action && turn.player_action !== OPENING_ACTION && <div className="player-intention"><span>{campaign.protagonist_name}</span><p>{turn.player_action}</p></div>}
                 <div className="gm-prose"><Markdown content={turn.gm_response} /></div>
                 <TurnChanges changes={turn.changes ?? []} fresh={turn.id === freshTurnId} />
-                <MemoryActionMenu campaign={campaign} turnId={turn.id} branchId={campaign.branch.id} content={turn.gm_response}
+                <TurnActions campaign={campaign} turnId={turn.id} turnIndex={turn.turn_index} latestIndex={latestTurn?.turn_index ?? turn.turn_index}
+                  branchId={campaign.branch.id} content={turn.gm_response} disabled={generating}
                   onChanged={(detail) => { cache.setQueryData(["campaign", campaignId, requestedBranchId], detail); void refetchCampaign(); }}
                   onError={(message) => setNotice(message)} />
                 <div className="passage-space" aria-hidden="true"><span /></div>

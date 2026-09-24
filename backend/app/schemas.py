@@ -111,6 +111,8 @@ class TurnCreate(BaseModel):
 
 class TurnEdit(BaseModel):
     content: str = Field(min_length=1, max_length=30_000)
+    # Wording only: replace the text but keep the saved state and every later turn.
+    wording_only: bool = False
 
 
 class RewindRequest(BaseModel):
