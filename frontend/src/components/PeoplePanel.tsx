@@ -6,7 +6,9 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { faceCrop, PortraitButton } from "@/components/PortraitLightbox";
+import { Pager, usePaged } from "@/components/Pager";
 import { EdgeStyle, RelationshipGraph } from "@/components/RelationshipGraph";
+import { ArrowUpRight, Network, RefreshCw } from "lucide-react";
 import { api, portraitUrl } from "@/lib/api";
 import type { CampaignDetail, Character, Importance, Relationship, RelationshipEvent } from "@/lib/api";
 
@@ -425,32 +427,40 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
     <div className="person-facts"><h4>History</h4><RelationshipTimeline relation={selectedEdge} /></div>
   </section>;
 
+  const listPage = usePaged(people, 8, "people");
+  const indexPage = usePaged(matchingPeople, 10, `${peopleFilter}|${search}|${showBackground}`);
   const openGraph = () => setView("graph");
   const closeGraph = () => setView("list");
 
   return <div className="lore-content people-panel">
     <p className="lore-label">THE PEOPLE</p>
     <h2 className="lore-name">Known faces</h2>
-    <div className="people-toolbar">
-      <button type="button" className="people-open-graph" onClick={openGraph}>View connections</button>
-      <button type="button" className="text-button" disabled={rebuilding} onClick={onReindex}>
-        {rebuilding ? "Reading the story…" : rebuilt ? "People refreshed" : "Recover people from story"}
+    <button type="button" className="graph-launch" onClick={openGraph} aria-label="Open the connection graph">
+      <span className="graph-launch-art" aria-hidden="true"><Network size={22} /></span>
+      <span className="graph-launch-copy"><strong>Connection graph</strong>
+        <small>{people.length + (protagonist ? 1 : 0)} people · {campaign.relationships.length} connections</small></span>
+      <ArrowUpRight size={16} className="graph-launch-go" aria-hidden="true" />
+    </button>
+    <div className="panel-actions">
+      <button type="button" className="btn btn--ghost btn--sm" disabled={rebuilding} onClick={onReindex}>
+        <RefreshCw size={13} className={rebuilding ? "spin" : undefined} />{rebuilding ? "Reading the story…" : rebuilt ? "People refreshed" : "Recover people from story"}
       </button>
     </div>
     {!people.length && <p className="lore-copy">No individual has entered the record yet. Recover people from the story to scan earlier scenes.</p>}
     {!!people.length && <div className="people-list" aria-label="Known people">
-      {people.map((person) => <button type="button" key={person.id} className="person-row"
+      {listPage.items.map((person) => <button type="button" key={person.id} className="person-row"
         aria-pressed={selected?.id === person.id} onClick={() => choosePerson(person.id)}>
         <strong>{person.name}</strong><span>{person.role || "Role unknown"}</span>
         <i className={`importance-dot importance-dot--${importanceOf(person).toLowerCase()}`} title={IMPORTANCE_LABEL[importanceOf(person)]} />
       </button>)}
     </div>}
+    <Pager {...listPage} setPage={(page) => listPage.setPage(page)} label="People" />
     {view === "list" && detail}
     {view === "graph" && typeof document !== "undefined" && createPortal(<div className={`people-graph-scrim theme-${campaign.theme?.family ?? "neutral"}`} onMouseDown={(event) => { if (event.target === event.currentTarget) closeGraph(); }}>
       <section className="people-graph-dialog" role="dialog" aria-modal="true" aria-labelledby="people-graph-title">
-        <header className="people-graph-head"><div><h2 id="people-graph-title">People and connections</h2><p>Who {campaign.protagonist_name} knows, and what has changed between them.</p></div>
+        <header className="people-graph-head"><div><h2 id="people-graph-title">Connection graph</h2><p>Who {campaign.protagonist_name} knows, and what has changed between them.</p></div>
           <div className="people-graph-head-actions"><button type="button" className="people-recover" disabled={rebuilding} onClick={onReindex}>{rebuilding ? "Reading story…" : rebuilt ? "People refreshed" : "Recover people"}</button>
-            <button type="button" className="people-close" aria-label="Close connections" onClick={closeGraph}>Close</button></div></header>
+            <button type="button" className="people-close" aria-label="Close connection graph" onClick={closeGraph}>Close</button></div></header>
         <div className="people-graph-layout">
           <aside className="people-index" aria-label="People filters and search">
             <label className="people-search-label" htmlFor="people-search">Search people</label>
@@ -467,11 +477,12 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
             <div className="people-index-list">
               {protagonist && <button type="button" className="people-index-row" aria-pressed={selected?.id === protagonist.id} onClick={() => choosePerson(protagonist.id)}>
                 <strong>{protagonist.name}</strong><span>Player character</span></button>}
-              {matchingPeople.map((person) => <button type="button" className="people-index-row" key={person.id}
+              {indexPage.items.map((person) => <button type="button" className="people-index-row" key={person.id}
                 aria-pressed={selected?.id === person.id} onClick={() => choosePerson(person.id)}>
                 <strong>{person.name}</strong><span>{person.role || "Role unknown"}</span></button>)}
               {!matchingPeople.length && <p className="people-empty">No people match these filters.</p>}
             </div>
+            <Pager {...indexPage} label="Campaign people" />
             <p className="people-index-foot">{rebuilding ? "Recovering names from earlier scenes…" : "Only known connections are drawn."}</p>
           </aside>
           <main className="people-graph-main">

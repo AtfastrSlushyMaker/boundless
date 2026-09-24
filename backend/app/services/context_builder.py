@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import (
     Ability,
     Campaign,
+    CampaignNote,
     CampaignSummary,
     CanonRule,
     Character,
@@ -179,6 +180,16 @@ async def build_messages(session: AsyncSession, campaign: Campaign, branch_id: U
     context_block = "\n\nCAMPAIGN CONSTITUTION (authoritative; never summarize away hard rules):\n" + json.dumps(constitution, ensure_ascii=False, default=str)
     context_block += "\n\nWORLD PRESENTATION (soft mood and visual direction):\n" + json.dumps(campaign.theme_profile or {}, ensure_ascii=False, default=str)
     context_block += "\n\nCANONICAL WORLD CONTEXT (most important first):\n" + json.dumps(layers, ensure_ascii=False, default=str)
+    pinned = (await session.scalars(select(CampaignNote).where(
+        CampaignNote.campaign_id == campaign.id, CampaignNote.pinned.is_(True),
+        (CampaignNote.branch_id.is_(None) | (CampaignNote.branch_id == branch_id)))
+        .order_by(CampaignNote.updated_at.desc()).limit(6))).all()
+    if pinned:
+        reminders = [" — ".join(part for part in (note.title, note.body[:280], note.quote[:200] and f'"{note.quote[:200]}"') if part)
+                     for note in pinned]
+        context_block += ("\n\nPLAYER'S PINNED NOTES (the player's own reminders and interests; not established canon. "
+                          "Keep them in mind when relevant, never treat them as facts, and never reveal hidden information because of them):\n"
+                          + "\n".join(f"- {line}" for line in reminders if line))
     if canon_notes:
         context_block += "\n\nCANON NOTES FOR THIS TURN (follow these):\n" + "\n".join(f"- {note['note']}" for note in canon_notes)
     messages: list[dict[str, str]] = [{"role": "system", "content": system + context_block}]

@@ -327,6 +327,17 @@ class StateInterpretation(BaseModel):
             return 0
 
 
+class NoteWrite(BaseModel):
+    """A notebook entry. Everything is optional on update; ``quote`` is a saved story passage."""
+
+    title: str | None = Field(default=None, max_length=160)
+    body: str | None = Field(default=None, max_length=8000)
+    quote: str | None = Field(default=None, max_length=4000)
+    tag: Literal["note", "clue", "idea", "quote", "todo"] | None = None
+    pinned: bool | None = None
+    turn_id: UUID | None = None
+
+
 class CampaignImport(BaseModel):
     format: Literal["boundless-campaign"]
     version: int = Field(ge=1)

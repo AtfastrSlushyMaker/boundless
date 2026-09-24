@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Providers } from "./providers";
+import { SCHEME_BOOT_SCRIPT } from "@/lib/schemeBoot";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -8,8 +9,14 @@ export const metadata: Metadata = {
   applicationName: "Boundless",
 };
 
-export const viewport: Viewport = { themeColor: "#181713", colorScheme: "dark" };
+export const viewport: Viewport = {
+  themeColor: [{ media: "(prefers-color-scheme: dark)", color: "#141512" }, { media: "(prefers-color-scheme: light)", color: "#f3efe7" }],
+  colorScheme: "dark light",
+};
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body><Providers>{children}</Providers></body></html>;
+  return <html lang="en" data-scheme="dark" suppressHydrationWarning>
+    <head><script dangerouslySetInnerHTML={{ __html: SCHEME_BOOT_SCRIPT }} /></head>
+    <body><Providers>{children}</Providers></body>
+  </html>;
 }

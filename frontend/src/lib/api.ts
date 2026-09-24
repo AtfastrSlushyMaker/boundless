@@ -207,6 +207,13 @@ export type StreamEvent =
   | { type: "complete"; turn_id: string; turn_index: number; branch_id: string; state_delta: unknown; changes?: TurnChange[]; metrics?: Record<string, number> }
   | { type: "error"; turn_id?: string; message: string };
 
+export type NoteTag = "note" | "clue" | "idea" | "quote" | "todo";
+export type CampaignNote = {
+  id: string; title: string; body: string; quote: string; tag: NoteTag; pinned: boolean;
+  turn_id: string | null; turn_index: number | null; branch_id: string | null; created_at: string | null; updated_at: string | null;
+};
+export type NoteWrite = Partial<Pick<CampaignNote, "title" | "body" | "quote" | "tag" | "pinned">> & { turn_id?: string };
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, { ...init, cache: "no-store" });
   if (!response.ok) {
@@ -221,7 +228,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+const json = (method: string, payload: unknown): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+
 export const api = {
+  notes: (campaignId: string) => request<{ notes: CampaignNote[] }>(`/api/campaigns/${campaignId}/notes`),
+  createNote: (campaignId: string, branchId: string, payload: NoteWrite) =>
+    request<CampaignNote>(`/api/campaigns/${campaignId}/notes?branch_id=${branchId}`, json("POST", payload)),
+  updateNote: (campaignId: string, noteId: string, payload: NoteWrite) =>
+    request<CampaignNote>(`/api/campaigns/${campaignId}/notes/${noteId}`, json("PATCH", payload)),
+  deleteNote: (campaignId: string, noteId: string) => request<void>(`/api/campaigns/${campaignId}/notes/${noteId}`, { method: "DELETE" }),
   health: () => request<{ status: string; database: string; model: { status: string; model?: string; selection?: string } }>("/api/health"),
   capabilities: () => request<SystemCapabilities>("/api/system/capabilities"),
   campaigns: (archived = false) => request<CampaignCard[]>(`/api/campaigns?include_archived=${archived}`),

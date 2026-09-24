@@ -19,6 +19,7 @@ from app.db.models import (
     Ability,
     Branch,
     Campaign,
+    CampaignNote,
     CampaignSummary,
     CanonRule,
     Character,
@@ -46,13 +47,13 @@ from app.services.idmap import remap_ids
 EXPORT_VERSION = 2
 TABLES = ["canon_rules", "factions", "characters", "character_aliases", "character_facts", "abilities", "locations",
           "items", "faction_relationships", "character_relationships", "relationship_events", "events", "memories",
-          "secrets", "objectives", "campaign_summaries"]
+          "secrets", "objectives", "campaign_summaries", "campaign_notes"]
 MODELS = {
     "canon_rules": CanonRule, "factions": Faction, "characters": Character, "character_aliases": CharacterAlias,
     "character_facts": CharacterFact, "abilities": Ability, "locations": Location, "items": Item,
     "faction_relationships": FactionRelationship, "character_relationships": CharacterRelationship,
     "relationship_events": RelationshipEvent, "events": Event, "memories": Memory, "secrets": Secret,
-    "objectives": Objective, "campaign_summaries": CampaignSummary,
+    "objectives": Objective, "campaign_summaries": CampaignSummary, "campaign_notes": CampaignNote,
 }
 SKIP_COLUMNS = {"embedding"}
 

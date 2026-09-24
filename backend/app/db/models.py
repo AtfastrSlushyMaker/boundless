@@ -339,6 +339,29 @@ class Objective(Base):
     visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
 
 
+class CampaignNote(Base):
+    """The player's own notebook: notes and saved story passages. Never canon.
+
+    Pinned notes are shown to the narrator as the player's reminders, clearly marked as
+    not established fact.
+    """
+
+    __tablename__ = "campaign_notes"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[UUID | None] = mapped_column(ForeignKey("branches.id", ondelete="SET NULL"), nullable=True)
+    turn_id: Mapped[UUID | None] = mapped_column(ForeignKey("turns.id", ondelete="SET NULL"), nullable=True)
+    turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title: Mapped[str] = mapped_column(String(160), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    quote: Mapped[str] = mapped_column(Text, default="")
+    tag: Mapped[str] = mapped_column(String(24), default="note")
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class CampaignSummary(Base):
     __tablename__ = "campaign_summaries"
     __table_args__ = (UniqueConstraint("branch_id", "summary_type", name="uq_branch_summary_type"),)

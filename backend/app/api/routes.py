@@ -18,6 +18,7 @@ from app.db.models import (
     Ability,
     Branch,
     Campaign,
+    CampaignNote,
     CampaignSummary,
     CanonRule,
     Character,
@@ -58,6 +59,7 @@ from app.schemas import (
     MLXStartRequest,
     ModelRolesUpdate,
     ModelSettingsUpdate,
+    NoteWrite,
     PortraitRequest,
     RelationshipUpdate,
     RepairApply,
@@ -885,6 +887,68 @@ async def archive_campaign(campaign_id: UUID, archived: bool = True, session: As
     campaign.archived = archived
     await session.commit()
     return {"id": str(campaign.id), "archived": campaign.archived}
+
+
+def _note(note: CampaignNote) -> dict:
+    return {"id": str(note.id), "title": note.title, "body": note.body, "quote": note.quote, "tag": note.tag,
+            "pinned": note.pinned, "turn_id": str(note.turn_id) if note.turn_id else None, "turn_index": note.turn_index,
+            "branch_id": str(note.branch_id) if note.branch_id else None,
+            "created_at": note.created_at.isoformat() if note.created_at else None,
+            "updated_at": note.updated_at.isoformat() if note.updated_at else None}
+
+
+@router.get("/campaigns/{campaign_id}/notes")
+async def list_notes(campaign_id: UUID, session: AsyncSession = Depends(get_session)):
+    await _campaign(session, campaign_id)
+    notes = (await session.scalars(select(CampaignNote).where(CampaignNote.campaign_id == campaign_id)
+                                   .order_by(CampaignNote.pinned.desc(), CampaignNote.updated_at.desc()))).all()
+    return {"notes": [_note(note) for note in notes]}
+
+
+@router.post("/campaigns/{campaign_id}/notes", status_code=201)
+async def create_note(campaign_id: UUID, payload: NoteWrite, branch_id: UUID | None = None,
+                      session: AsyncSession = Depends(get_session)):
+    await _campaign(session, campaign_id)
+    if not ((payload.title or "").strip() or (payload.body or "").strip() or (payload.quote or "").strip()):
+        raise HTTPException(422, "Write something or save a passage first.")
+    note = CampaignNote(campaign_id=campaign_id, branch_id=branch_id, title=(payload.title or "").strip(),
+                        body=(payload.body or "").strip(), quote=(payload.quote or "").strip(),
+                        tag=payload.tag or ("quote" if payload.quote else "note"), pinned=bool(payload.pinned))
+    if payload.turn_id:
+        turn = await session.get(Turn, payload.turn_id)
+        if turn and turn.campaign_id == campaign_id:
+            note.turn_id, note.turn_index = turn.id, turn.turn_index
+    session.add(note)
+    await session.commit()
+    await session.refresh(note)
+    return _note(note)
+
+
+async def _owned_note(session: AsyncSession, campaign_id: UUID, note_id: UUID) -> CampaignNote:
+    note = await session.get(CampaignNote, note_id)
+    if not note or note.campaign_id != campaign_id:
+        raise HTTPException(404, "Note not found.")
+    return note
+
+
+@router.patch("/campaigns/{campaign_id}/notes/{note_id}")
+async def update_note(campaign_id: UUID, note_id: UUID, payload: NoteWrite, session: AsyncSession = Depends(get_session)):
+    note = await _owned_note(session, campaign_id, note_id)
+    for field in ("title", "body", "quote", "tag", "pinned"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(note, field, value.strip() if isinstance(value, str) else value)
+    await session.commit()
+    await session.refresh(note)
+    return _note(note)
+
+
+@router.delete("/campaigns/{campaign_id}/notes/{note_id}", status_code=204)
+async def delete_note(campaign_id: UUID, note_id: UUID, session: AsyncSession = Depends(get_session)):
+    note = await _owned_note(session, campaign_id, note_id)
+    await session.delete(note)
+    await session.commit()
+    return None
 
 
 @router.delete("/campaigns/{campaign_id}", status_code=204)

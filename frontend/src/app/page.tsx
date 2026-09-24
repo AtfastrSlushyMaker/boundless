@@ -9,6 +9,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { AtlasArtwork } from "@/components/AtlasArtwork";
 import { CreateWorldDialog } from "@/components/CreateWorldDialog";
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
+import { SchemeToggle } from "@/components/SchemeToggle";
 import { WorldMenu } from "@/components/WorldMenu";
 import { api, CampaignCard, importCampaign } from "@/lib/api";
 
@@ -102,6 +103,7 @@ export default function HomePage() {
             <span className={`status-mark ${modelConnected ? "status-mark--on" : "status-mark--off"}`} />
             <span>{modelConnected ? "Model ready" : status?.model?.status === "offline" ? "Model offline" : status?.model?.status === "loading" ? "Model loading" : "Checking model"}</span>
           </button>
+          <SchemeToggle />
           <button className="icon-button top-settings" onClick={() => setSettingsOpen(true)} aria-label="Open settings"><Settings2 size={18} /></button>
         </div>
       </header>

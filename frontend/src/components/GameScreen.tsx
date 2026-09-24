@@ -9,7 +9,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowLeft, ArrowUpRight, Backpack, CheckCircle2, ChevronDown, CircleAlert, Clock3, Flag, GitBranch,
-  Map, Menu, MessageSquareText, Moon, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw,
+  Bookmark, Map, Menu, MessageSquareText, Moon, NotebookPen, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw,
   ScrollText, Send, Settings2, Shield, Sparkles, StopCircle, Sun, Sunrise, Sunset, Users, X,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,12 +19,14 @@ import { CampaignHealth } from "@/components/CampaignHealth";
 import { GenerationProgress } from "@/components/GenerationProgress";
 import { faceCrop, PortraitButton } from "@/components/PortraitLightbox";
 import { ProfileList } from "@/components/LivingProfile";
+import { NotebookPanel } from "@/components/NotebookPanel";
 import { PeoplePanel } from "@/components/PeoplePanel";
+import { SchemeToggle } from "@/components/SchemeToggle";
 import { ChangeToasts, TurnChanges } from "@/components/TurnChanges";
 import { api, CampaignDetail, GameMode, Objective, PlayerProfile, SceneMood, StreamEvent, ThemeFamily, TurnChange, portraitUrl, streamTurn } from "@/lib/api";
 
 const OPENING_ACTION = "Open on the campaign's stated starting moment.";
-type LorePanel = "character" | "people" | "quests" | "inventory" | "world" | "rules" | "journal";
+type LorePanel = "character" | "people" | "quests" | "inventory" | "world" | "rules" | "journal" | "notebook";
 type WorldClock = { day?: number; time_of_day?: string; label?: string };
 
 function worldClock(campaign: CampaignDetail): WorldClock {
@@ -119,6 +121,18 @@ function MemoryActionMenu({ campaign, turnId, branchId, content, onChanged, onEr
     catch (error) { onError(error instanceof Error ? error.message : "The edit could not be saved."); }
     finally { setBusy(false); }
   };
+  const client = useQueryClient();
+  const [saved, setSaved] = useState(false);
+  const savePassage = async () => {
+    const selection = typeof window !== "undefined" ? window.getSelection()?.toString().trim() ?? "" : "";
+    const quote = (selection && content.includes(selection.slice(0, 40)) ? selection : content).slice(0, 3900);
+    try {
+      await api.createNote(campaign.id, branchId, { quote, turn_id: turnId, tag: "quote" });
+      setSaved(true);
+      void client.invalidateQueries({ queryKey: ["notes", campaign.id] });
+      window.setTimeout(() => setSaved(false), 2400);
+    } catch (error) { onError(error instanceof Error ? error.message : "The passage could not be saved."); }
+  };
   const regenerate = () => setPromptDialog({ kind: "rewrite", value: "" });
   const rewind = () => {
     if (!window.confirm("Return this timeline to the end of this turn? Later turns remain in the archive but leave the active story.")) return;
@@ -157,6 +171,8 @@ function MemoryActionMenu({ campaign, turnId, branchId, content, onChanged, onEr
       <button className="tool-button" aria-label="Regenerate narration" title="Regenerate" disabled={busy} onClick={regenerate}><RotateCcw size={15} /><span>Rewrite</span></button>
       <button className="tool-button" aria-label="Branch from this turn" title="Branch from here" disabled={busy} onClick={fork}><GitBranch size={15} /><span>Branch</span></button>
       <button className="tool-button" aria-label="Rewind to this turn" title="Rewind to this turn" disabled={busy} onClick={rewind}><ArrowLeft size={15} /><span>Rewind</span></button>
+      <button className={`tool-button${saved ? " is-done" : ""}`} aria-label="Save passage to notebook" title="Save to notebook (saves your selection, or the passage)" disabled={busy || saved} onClick={() => void savePassage()}>
+        <Bookmark size={15} /><span>{saved ? "Saved" : "Save"}</span></button>
     </div>
     <AnimatePresence initial={false}>
       {promptDialog && <motion.div key={`${promptDialog.kind}-${turnId}`} className="dialog-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setPromptDialog(null); }}
@@ -203,6 +219,7 @@ function SidebarContent({ panel, campaign, onRefreshSetup, refreshingSetup, refr
   const [characterTab, setCharacterTab] = useState<"overview" | "traits" | "history" | "goals" | "reputation">("overview");
   const [inventorySearch, setInventorySearch] = useState("");
   const [journalTab, setJournalTab] = useState<"events" | "memories" | "secrets" | "health">("events");
+  if (panel === "notebook") return <NotebookPanel campaign={campaign} />;
   if (panel === "character") {
     const constitution = campaign.constitution;
     const protagonist = campaign.characters.find((person) => person.name === campaign.protagonist_name);
@@ -514,9 +531,20 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
     router.replace(`/campaign/${campaignId}?branch=${id}`);
   };
 
+  // Theme tokens live on <html>, so dialogs and portals share the world's family and the scene's mood.
+  const themeFamily = campaignQuery.data?.theme?.family ?? "neutral";
+  const moodName = adaptiveMood && campaignQuery.data ? sceneMood(campaignQuery.data).mood : null;
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.family = themeFamily;
+    if (moodName) root.dataset.mood = moodName; else delete root.dataset.mood;
+    return () => { delete root.dataset.family; delete root.dataset.mood; };
+  }, [themeFamily, moodName]);
+
   const nav = useMemo(() => [
     ["character", "Character", Users], ["people", "People", MessageSquareText], ["quests", "Objectives", Flag],
-    ["inventory", "Inventory", Backpack], ["world", "World", Map], ["rules", "World rules", Shield], ["journal", "Journal", ScrollText],
+    ["inventory", "Inventory", Backpack], ["world", "World", Map], ["rules", "Rules", Shield], ["journal", "Journal", ScrollText],
+    ["notebook", "Notebook", NotebookPen],
   ] as const, []);
 
   if (campaignQuery.isLoading) return <main className="game-loading"><span className="brand-glyph">B</span><p>Opening the archive…</p></main>;
@@ -551,6 +579,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
             <span className={`status-mark ${modelReady ? "status-mark--on" : "status-mark--off"}`} />
             <span>{modelReady ? "Model ready" : health.data?.model?.status === "loading" ? "Model loading" : "Model offline"}</span>
           </button>
+          <SchemeToggle />
           <button className="icon-button" aria-label="Model settings" onClick={() => setSettingsOpen(true)}><Settings2 size={18} /></button>
         </div>
       </header>
