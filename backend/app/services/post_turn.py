@@ -207,12 +207,47 @@ async def _visuals(session: AsyncSession, job: PostTurnJob, factory: Callable) -
         await describe_and_store(session, campaign, person, routed.provider, turns)
 
 
+async def _factions(session: AsyncSession, job: PostTurnJob, factory: Callable) -> None:
+    """Link people to groups every turn; ask the state model when new people are ungrouped or every eight turns."""
+    from app.db.models import Turn
+    from app.services.affiliations import sync_affiliations
+
+    campaign = await session.get(Campaign, job.campaign_id)
+    branch = await session.get(Branch, job.branch_id)
+    if not campaign or not branch:
+        return
+    head = await session.get(Turn, branch.head_turn_id) if branch.head_turn_id else None
+    state = dict(branch.current_state or {})
+    last = int(state.get("faction_sync_turn") or 0)
+    people = (await session.scalars(select(Character).where(
+        Character.branch_id == branch.id, Character.visibility == "PLAYER_KNOWN"))).all()
+    unchecked = [person for person in people if person.importance != "BACKGROUND"
+                 and not (person.attributes or {}).get("affiliation_checked")]
+    use_model = bool(head) and (len(unchecked) >= 1 and head.turn_index - last >= 2 or head.turn_index - last >= 8)
+    provider = (await route(session, "state", factory)).provider if use_model else None
+    await sync_affiliations(session, campaign, branch, provider)
+    if provider is not None and head:
+        for person in people:
+            person.attributes = {**(person.attributes or {}), "affiliation_checked": True}
+        branch.current_state = {**state, "faction_sync_turn": head.turn_index}
+    if head:
+        # Keep the head checkpoint in step so a rewind to this turn keeps the groups.
+        from app.db.models import Checkpoint
+        from app.services.state_service import capture_snapshot
+        checkpoint = await session.scalar(select(Checkpoint).where(
+            Checkpoint.branch_id == branch.id, Checkpoint.turn_id == head.id,
+            Checkpoint.turn_index == head.turn_index).order_by(Checkpoint.created_at.desc()))
+        if checkpoint:
+            checkpoint.state_snapshot = await capture_snapshot(session, branch)
+
+
 async def _embeddings(session: AsyncSession, job: PostTurnJob, factory: Callable) -> None:
     await embed_missing(session, job.branch_id)
 
 
 HANDLERS = {"SUMMARY_UPDATE": _summary, "MEMORY_EMBEDDING": _embeddings, "PORTRAIT_QUEUE": _portraits,
-            "CONSTITUTION_EXTRACTION": _constitution, "PROFILE_EVOLUTION": _profile, "VISUAL_PROFILE": _visuals}
+            "CONSTITUTION_EXTRACTION": _constitution, "PROFILE_EVOLUTION": _profile, "VISUAL_PROFILE": _visuals,
+            "FACTION_SYNC": _factions}
 
 
 async def run_job(job_id: UUID, factory: Callable | None = None) -> str:

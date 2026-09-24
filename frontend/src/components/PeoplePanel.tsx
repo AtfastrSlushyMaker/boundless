@@ -6,7 +6,9 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { faceCrop, PortraitButton } from "@/components/PortraitLightbox";
+import { FactionGroups } from "@/components/FactionGroups";
 import { Pager, usePaged } from "@/components/Pager";
+import { affiliationsOf, groupPeople, KIND_LABEL, stanceFor } from "@/lib/people";
 import { EdgeStyle, RelationshipGraph } from "@/components/RelationshipGraph";
 import { ArrowUpRight, Network, RefreshCw } from "lucide-react";
 import { api, portraitUrl } from "@/lib/api";
@@ -23,7 +25,7 @@ type Props = {
 type PeopleFilter = "all" | "allies" | "enemies" | "factions";
 type RelationshipFilter = "all" | "kinship" | Axis;
 type Axis = "trust" | "respect" | "fear" | "hostility" | "affection" | "loyalty" | "attraction" | "debt" | "dependence";
-type ProfileDraft = { role: string; personality: string; appearance: string; sex: string; gender: string; pronouns: string };
+type ProfileDraft = { role: string; personality: string; appearance: string; sex: string; gender: string; pronouns: string; groups: string };
 type CoreAxis = "trust" | "respect" | "fear" | "hostility";
 type RelationDraft = Record<CoreAxis, string> & { status: string; summary: string };
 
@@ -83,20 +85,6 @@ function socialRelation(person: Character | undefined, protagonistName: string, 
     return axisCount * 1000 + historyCount * 10 + (dimensions.last_interaction ? 1 : 0);
   };
   return detailCount(playerView) > detailCount(personView) ? playerView : personView ?? playerView;
-}
-
-function categoryFor(person: Character, protagonistName: string, relationships: Relationship[]): PeopleFilter {
-  const relation = socialRelation(person, protagonistName, relationships);
-  const hostility = score(relation, "hostility") ?? 0;
-  const trust = score(relation, "trust") ?? 0;
-  if (hostility >= 60) return "enemies";
-  if (trust >= 70 && hostility < 30) return "allies";
-  return "all";
-}
-
-function isFactionMember(person: Character) {
-  return Boolean(person.attributes?.faction || person.attributes?.faction_name)
-    || /\b(?:faction|clan|order|guild|house|guard|watch|circle|court)\b/i.test(person.role);
 }
 
 function relationshipStatus(relation: Relationship | undefined) {
@@ -183,7 +171,9 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
   const imageSettings = useQuery({ queryKey: ["image-settings"], queryFn: api.imageSettings, retry: false });
   const [editing, setEditing] = useState<"profile" | "relationship" | null>(null);
   const [saving, setSaving] = useState(false);
-  const [profileDraft, setProfileDraft] = useState<ProfileDraft>({ role: "", personality: "", appearance: "", sex: "", gender: "", pronouns: "" });
+  const [profileDraft, setProfileDraft] = useState<ProfileDraft>({ role: "", personality: "", appearance: "", sex: "", gender: "", pronouns: "", groups: "" });
+  const [groupFilter, setGroupFilter] = useState("all");
+  const [regrouping, setRegrouping] = useState(false);
   const [relationDraft, setRelationDraft] = useState<RelationDraft>({ trust: "", respect: "", fear: "", hostility: "", status: "", summary: "" });
   const choosePerson = (id: string) => { setSelectedId(id); setSelectedEdgeId(null); setShowAllFacts(false); setEditing(null); setAvatarError(""); };
 
@@ -191,16 +181,29 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
   const people = campaign.characters.filter((person) => person.name !== campaign.protagonist_name && isIndividual(person, campaign.protagonist_name))
     .sort((left, right) => IMPORTANCE_ORDER.indexOf(importanceOf(left)) - IMPORTANCE_ORDER.indexOf(importanceOf(right)) || left.name.localeCompare(right.name));
   const backgroundCount = people.filter((person) => importanceOf(person) === "BACKGROUND").length;
-  const matchingPeople = people.filter((person) => {
-    const category = categoryFor(person, campaign.protagonist_name, campaign.relationships);
-    const faction = person.attributes?.faction ?? person.attributes?.faction_name;
-    const inFaction = isFactionMember(person);
-    const matchesFilter = peopleFilter === "all" || (peopleFilter === "factions" ? inFaction : category === peopleFilter);
-    const query = search.trim().toLocaleLowerCase();
-    const matchesSearch = !query || `${person.name} ${person.role} ${String(faction ?? "")}`.toLocaleLowerCase().includes(query);
-    const matchesImportance = showBackground || importanceOf(person) !== "BACKGROUND" || selectedId === person.id;
-    return matchesFilter && matchesSearch && matchesImportance;
-  });
+  const stanceOf = (person: Character) => stanceFor(person, campaign);
+  const category = (person: Character): PeopleFilter => {
+    const stance = stanceOf(person).kind;
+    return stance === "ally" ? "allies" : stance === "enemy" ? "enemies" : "all";
+  };
+  const activeGroup = campaign.factions.find((faction) => faction.id === groupFilter);
+  const inActiveGroup = (person: Character) => !activeGroup || activeGroup.members.some((member) => member.id === person.id);
+  const searchable = (person: Character) => [person.name, person.role, ...(person.aliases ?? []).map((alias) => alias.alias),
+    ...affiliationsOf(person).map((entry) => entry.name)].join(" ").toLocaleLowerCase();
+  const matchesQuery = (person: Character) => !search.trim() || searchable(person).includes(search.trim().toLocaleLowerCase());
+  const matchesFilter = (person: Character) => peopleFilter === "all" || (peopleFilter === "factions" ? affiliationsOf(person).length > 0 : category(person) === peopleFilter);
+  const matchingPeople = people.filter((person) => matchesFilter(person) && matchesQuery(person) && inActiveGroup(person)
+    && (showBackground || importanceOf(person) !== "BACKGROUND" || selectedId === person.id));
+  // The side list shows everyone (background included), narrowed by search and filter.
+  const listPeople = people.filter((person) => (peopleFilter === "factions" || matchesFilter(person)) && matchesQuery(person));
+  const filterCount = (filter: PeopleFilter) => people.filter((person) => filter === "all" ? true
+    : filter === "factions" ? affiliationsOf(person).length > 0 : category(person) === filter).length;
+  const regroup = async () => {
+    setRegrouping(true);
+    try { await api.syncFactions(campaign.id, campaign.branch.id); onRefresh(); }
+    catch (error) { setAvatarError(error instanceof Error ? error.message : "Regrouping failed."); }
+    finally { setRegrouping(false); }
+  };
   const visible = new Map<string, Character>();
   if (protagonist) visible.set(protagonist.name, protagonist);
   matchingPeople.forEach((person) => visible.set(person.name, person));
@@ -228,6 +231,7 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
       role: selected.role ?? "", personality: selected.personality ?? "",
       appearance: String(selected.attributes?.appearance ?? ""), sex: String(selected.attributes?.sex ?? ""),
       gender: String(selected.attributes?.gender ?? ""), pronouns: String(selected.attributes?.pronouns ?? ""),
+      groups: affiliationsOf(selected).map((entry) => entry.name).join(", "),
     });
     setEditing("profile");
   };
@@ -250,7 +254,10 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
     setAvatarError("");
     try {
       if (editing === "profile") {
-        await api.updateCharacter(campaign.id, campaign.branch.id, selected.id, profileDraft);
+        const { groups, ...profile } = profileDraft;
+        await api.updateCharacter(campaign.id, campaign.branch.id, selected.id, {
+          ...profile, affiliations: groups.split(",").map((name) => name.trim()).filter(Boolean),
+        });
       } else if (selectedRelation) {
         const axis = (key: CoreAxis) => relationDraft[key] === "" ? null : Number(relationDraft[key]);
         await api.updateRelationship(campaign.id, campaign.branch.id, selectedRelation.id, {
@@ -342,7 +349,15 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
         <Image src={avatarUrl} alt="" width={68} height={68} unoptimized /></PortraitButton>
         : <div className="person-portrait" aria-label={`No portrait for ${selected.name}`}><span aria-hidden="true">{selected.name.charAt(0).toLocaleUpperCase()}</span></div>}<div><p className="person-detail-role">{selected.role || "Role unknown"}</p><h3>{selected.name}</h3>
         {selected.name !== campaign.protagonist_name && <span className={`importance-badge importance-badge--${importanceOf(selected).toLowerCase()}`}>{IMPORTANCE_LABEL[importanceOf(selected)]}</span>}
+        {stanceOf(selected).kind && <span className={`stance-tag stance-tag--${stanceOf(selected).kind}`} title={stanceOf(selected).reason}>
+          {stanceOf(selected).kind === "ally" ? "Ally" : "Enemy"}<small> · {stanceOf(selected).reason}</small></span>}
         {selected.status && selected.status !== "alive" && <p className="person-status">{selected.status}</p>}</div></div></div>
+    {!!affiliationsOf(selected).length && <div className="person-groups" aria-label="Groups">
+      {affiliationsOf(selected).map((entry) => <button type="button" key={entry.name} className={`group-chip${entry.status === "former" ? " is-former" : ""}`}
+        data-kind={entry.kind} onClick={() => { setPeopleFilter("factions"); setSearch(entry.name); }}
+        title={`${KIND_LABEL[entry.kind] ?? "Group"}${entry.role ? ` · ${entry.role}` : ""}${entry.status === "former" ? " · former" : ""}`}>
+        <small>{KIND_LABEL[entry.kind] ?? "Group"}</small>{entry.name}{entry.status === "leader" && <em>leader</em>}{entry.status === "former" && <em>former</em>}</button>)}
+    </div>}
     <div className="portrait-controls">
       {(imageProvider === "comfyui" || imageProvider === "ai_horde") && <button type="button" className="portrait-action" onClick={() => void generateAvatar(Boolean(avatarUrl))} disabled={requestingAvatar || Boolean(pendingAvatarJob)}>{requestingAvatar ? "Requesting…" : pendingAvatarJob ? "Portrait generating…" : avatarUrl ? "Regenerate portrait" : "Generate portrait"}</button>}
       <button type="button" className="portrait-action" onClick={() => avatarInputRef.current?.click()} disabled={requestingAvatar}>Change / upload</button>
@@ -359,6 +374,8 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
       <div className="person-edit-grid"><label>Sex<select value={profileDraft.sex} onChange={(event) => setProfileDraft({ ...profileDraft, sex: event.target.value })}><option value="">Unspecified</option><option value="male">Male</option><option value="female">Female</option><option value="intersex">Intersex</option><option value="other">Other</option></select></label>
         <label>Gender<select value={profileDraft.gender} onChange={(event) => setProfileDraft({ ...profileDraft, gender: event.target.value })}><option value="">Unspecified</option><option value="man">Man</option><option value="woman">Woman</option><option value="nonbinary">Nonbinary</option><option value="other">Other</option></select></label></div>
       <label>Pronouns<input maxLength={60} value={profileDraft.pronouns} onChange={(event) => setProfileDraft({ ...profileDraft, pronouns: event.target.value })} placeholder="e.g. he/him" /></label>
+      <label>Groups<input maxLength={600} value={profileDraft.groups} onChange={(event) => setProfileDraft({ ...profileDraft, groups: event.target.value })}
+        placeholder="Factions, nation, guild, faith… separated by commas" /></label>
       <div className="person-edit-actions"><button type="button" onClick={() => setEditing(null)}>Cancel</button><button type="submit" disabled={saving}>{saving ? "Saving…" : "Save details"}</button></div>
     </form>}
     {!!selected.aliases?.length && <div className="alias-row" aria-label="Also known as"><span>Also known as</span>
@@ -427,7 +444,7 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
     <div className="person-facts"><h4>History</h4><RelationshipTimeline relation={selectedEdge} /></div>
   </section>;
 
-  const listPage = usePaged(people, 8, "people");
+  const listPage = usePaged(listPeople, 8, `${peopleFilter}|${search}`);
   const indexPage = usePaged(matchingPeople, 10, `${peopleFilter}|${search}|${showBackground}`);
   const openGraph = () => setView("graph");
   const closeGraph = () => setView("list");
@@ -447,14 +464,28 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
       </button>
     </div>
     {!people.length && <p className="lore-copy">No individual has entered the record yet. Recover people from the story to scan earlier scenes.</p>}
-    {!!people.length && <div className="people-list" aria-label="Known people">
+    {!!people.length && <div className="people-list-tools">
+      <input type="search" className="panel-search" value={search} onChange={(event) => setSearch(event.target.value)}
+        placeholder="Search name, role, alias or group" aria-label="Search people" />
+      <div className="chip-row" role="group" aria-label="Show">
+        {(["all", "allies", "enemies", "factions"] as PeopleFilter[]).map((filter) => <button type="button" key={filter} className="chip"
+          aria-pressed={peopleFilter === filter} onClick={() => setPeopleFilter(filter)}>
+          {filter === "all" ? "All" : filter === "factions" ? "Groups" : filter[0].toUpperCase() + filter.slice(1)}
+          <span className="chip-count">{filter === "factions" ? campaign.factions.filter((faction) => faction.members.length).length : filterCount(filter)}</span></button>)}
+      </div>
+    </div>}
+    {peopleFilter === "factions" && !!people.length && <FactionGroups groups={groupPeople(listPeople, campaign.factions)} selectedId={selected?.id}
+      onSelect={choosePerson} stanceOf={stanceOf} onRegroup={() => void regroup()} regrouping={regrouping} />}
+    {peopleFilter !== "factions" && !!people.length && !listPeople.length && <p className="empty-card">No one matches{search.trim() ? ` “${search.trim()}”` : ""}.</p>}
+    {peopleFilter !== "factions" && !!listPeople.length && <div className="people-list" aria-label="Known people">
       {listPage.items.map((person) => <button type="button" key={person.id} className="person-row"
         aria-pressed={selected?.id === person.id} onClick={() => choosePerson(person.id)}>
         <strong>{person.name}</strong><span>{person.role || "Role unknown"}</span>
+        {stanceOf(person).kind && <em className={`stance-tag stance-tag--${stanceOf(person).kind}`} title={stanceOf(person).reason}>{stanceOf(person).kind === "ally" ? "Ally" : "Enemy"}</em>}
         <i className={`importance-dot importance-dot--${importanceOf(person).toLowerCase()}`} title={IMPORTANCE_LABEL[importanceOf(person)]} />
       </button>)}
     </div>}
-    <Pager {...listPage} setPage={(page) => listPage.setPage(page)} label="People" />
+    {peopleFilter !== "factions" && <Pager {...listPage} label="People" />}
     {view === "list" && detail}
     {view === "graph" && typeof document !== "undefined" && createPortal(<div className={`people-graph-scrim theme-${campaign.theme?.family ?? "neutral"}`} onMouseDown={(event) => { if (event.target === event.currentTarget) closeGraph(); }}>
       <section className="people-graph-dialog" role="dialog" aria-modal="true" aria-labelledby="people-graph-title">
@@ -468,21 +499,22 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
             <nav className="people-filters" aria-label="Filter people">
               {(["all", "allies", "enemies", "factions"] as PeopleFilter[]).map((filter) => <button type="button" key={filter}
                 aria-pressed={peopleFilter === filter} onClick={() => setPeopleFilter(filter)}>{filter === "all" ? "All people" : filter[0].toUpperCase() + filter.slice(1)}
-                <span>{filter === "all" ? people.length + (protagonist ? 1 : 0) : people.filter((person) => filter === "factions"
-                  ? isFactionMember(person)
-                  : categoryFor(person, campaign.protagonist_name, campaign.relationships) === filter).length}</span>
+                <span>{filter === "all" ? people.length + (protagonist ? 1 : 0) : filterCount(filter)}</span>
               </button>)}
             </nav>
             <div className="people-index-heading"><span>Campaign people</span><span>{matchingPeople.length + (protagonist ? 1 : 0)}</span></div>
+            {peopleFilter === "factions" ? <FactionGroups compact groups={groupPeople(matchingPeople, campaign.factions)} selectedId={selected?.id}
+              onSelect={choosePerson} stanceOf={stanceOf} onRegroup={() => void regroup()} regrouping={regrouping} /> : <>
             <div className="people-index-list">
               {protagonist && <button type="button" className="people-index-row" aria-pressed={selected?.id === protagonist.id} onClick={() => choosePerson(protagonist.id)}>
                 <strong>{protagonist.name}</strong><span>Player character</span></button>}
               {indexPage.items.map((person) => <button type="button" className="people-index-row" key={person.id}
                 aria-pressed={selected?.id === person.id} onClick={() => choosePerson(person.id)}>
-                <strong>{person.name}</strong><span>{person.role || "Role unknown"}</span></button>)}
+                <strong>{person.name}</strong><span>{person.role || "Role unknown"}</span>
+                {stanceOf(person).kind && <em className={`stance-tag stance-tag--${stanceOf(person).kind}`} title={stanceOf(person).reason}>{stanceOf(person).kind === "ally" ? "Ally" : "Enemy"}</em>}</button>)}
               {!matchingPeople.length && <p className="people-empty">No people match these filters.</p>}
             </div>
-            <Pager {...indexPage} label="Campaign people" />
+            <Pager {...indexPage} label="Campaign people" /></>}
             <p className="people-index-foot">{rebuilding ? "Recovering names from earlier scenes…" : "Only known connections are drawn."}</p>
           </aside>
           <main className="people-graph-main">
@@ -493,6 +525,12 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
                 <option value="fear">Fear</option><option value="hostility">Hostility</option>
                 {presentAxes.map((axis) => <option key={axis} value={axis}>{AXIS_LABELS[axis]}</option>)}
               </select>
+              {campaign.factions.some((faction) => faction.members.length) && <><label htmlFor="group-filter">Group</label>
+                <select id="group-filter" value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)}>
+                  <option value="all">Everyone</option>
+                  {campaign.factions.filter((faction) => faction.members.length).map((faction) =>
+                    <option key={faction.id} value={faction.id}>{faction.name} ({faction.members.length})</option>)}
+                </select></>}
               {backgroundCount > 0 && <label className="background-toggle"><input type="checkbox" checked={showBackground} onChange={(event) => setShowBackground(event.target.checked)} />Background ({backgroundCount})</label>}
             </div>
             <RelationshipGraph people={graphPeople} relationships={relationships} protagonistName={campaign.protagonist_name}

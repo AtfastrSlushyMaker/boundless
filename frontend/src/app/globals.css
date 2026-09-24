@@ -830,3 +830,72 @@ body,.game-shell,.game-topbar,.campaign-rail,.story-workspace,.action-dock,.lore
 :root[data-scheme=light] .graph-edge[data-axis=attraction]{color:#9a3f94}:root[data-scheme=light] .graph-edge[data-axis=debt]{color:#7d6a1f}
 :root[data-scheme=light] .graph-edge[data-axis=dependence]{color:#4f5f80}
 .home-topbar,.atlas-hero{color:var(--ink)}
+/* Keep responsive visibility above the icon-button display rule. */
+.icon-button.mobile-only{display:none}
+@media(max-width:760px){.icon-button.mobile-only{display:inline-grid}.icon-button.desktop-only{display:none}}
+
+/* Appearance menu */
+.scheme-menu{position:relative}
+.scheme-menu-list{position:absolute;right:0;top:calc(100% + 8px);z-index:120;display:grid;gap:2px;min-width:176px;padding:6px;border:1px solid var(--line-strong);border-radius:12px;
+  background:var(--surface);box-shadow:0 16px 40px var(--shadow);transform-origin:top right}
+.scheme-menu-list button{display:flex;align-items:center;gap:10px;width:100%;min-height:34px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--ink);font:500 12.5px/1 var(--sans);text-align:left;cursor:pointer}
+.scheme-menu-list button:hover,.scheme-menu-list button:focus-visible{background:color-mix(in srgb,var(--gold) 12%,transparent);outline:none}
+.scheme-menu-list button[aria-checked=true]{color:var(--gold)}
+.scheme-menu-list button svg:last-child{margin-left:auto}
+.scheme-menu-list small{padding:6px 10px 4px;color:var(--quiet);font:700 10px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase}
+
+/* ═════ People: search, stance, groups ═════ */
+.people-list-tools{display:grid;gap:8px;margin:0 0 12px}
+.chip-count{margin-left:2px;padding:1px 6px;border-radius:999px;background:color-mix(in srgb,var(--ink) 8%,transparent);color:var(--quiet);font-size:10px}
+.chip[aria-pressed=true] .chip-count{background:color-mix(in srgb,var(--gold) 22%,transparent);color:var(--ink)}
+.chip--static{cursor:default}
+.chip--static[data-tone=enemy]{border-color:color-mix(in srgb,var(--danger) 50%,var(--line));color:var(--danger)}
+.chip--static[data-tone=ally]{border-color:color-mix(in srgb,var(--ok) 50%,var(--line));color:var(--ok)}
+.stance-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:999px;font:700 9.5px/1.3 var(--sans);letter-spacing:.04em;text-transform:uppercase;font-style:normal;white-space:nowrap}
+.stance-tag small{font-weight:500;letter-spacing:0;text-transform:none;opacity:.85}
+.stance-tag--ally{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.stance-tag--enemy{background:color-mix(in srgb,var(--danger) 16%,transparent);color:var(--danger)}
+.person-row{position:relative}
+.person-row .stance-tag{position:absolute;right:26px;top:50%;transform:translateY(-50%)}
+.people-index-row{position:relative}
+.people-index-row .stance-tag{position:absolute;right:8px;top:8px}
+.person-identity .stance-tag{margin:6px 0 0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.person-groups{display:flex;flex-wrap:wrap;gap:5px;margin:-6px 0 14px}
+.group-chip{display:inline-flex;align-items:center;gap:6px;min-height:26px;padding:0 10px 0 4px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:600 11.5px/1 var(--sans);cursor:pointer;transition:border-color .16s ease,background-color .16s ease}
+.group-chip:hover{border-color:var(--gold)}
+.group-chip small{padding:3px 6px;border-radius:999px;background:color-mix(in srgb,var(--gold) 16%,transparent);color:var(--gold);font:700 9px/1 var(--sans);letter-spacing:.05em;text-transform:uppercase}
+.group-chip em{color:var(--quiet);font-style:normal;font-weight:500}
+.group-chip.is-former{opacity:.7}
+
+.faction-groups{display:grid;gap:8px;margin:0 0 12px}
+.faction-groups-head{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--quiet);font-size:11px}
+.faction-card{overflow:hidden;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.faction-card.is-loose{border-style:dashed;background:transparent}
+.faction-card-head{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border:0;background:transparent;color:var(--ink);text-align:left;cursor:pointer}
+.faction-card-head:hover{background:color-mix(in srgb,var(--gold) 6%,transparent)}
+.faction-icon{display:grid;place-items:center;flex:none;width:30px;height:30px;border-radius:9px;background:color-mix(in srgb,var(--gold) 16%,transparent);color:var(--gold)}
+.faction-card[data-kind=religion] .faction-icon{background:color-mix(in srgb,var(--reveal) 18%,transparent);color:var(--reveal)}
+.faction-card[data-kind=military] .faction-icon{background:color-mix(in srgb,var(--danger) 16%,transparent);color:var(--danger)}
+.faction-card[data-kind=nation] .faction-icon,.faction-card[data-kind=government] .faction-icon{background:color-mix(in srgb,var(--cool) 18%,transparent);color:var(--cool)}
+.faction-card[data-kind=guild] .faction-icon,.faction-card[data-kind=house] .faction-icon{background:color-mix(in srgb,var(--warm) 18%,transparent);color:var(--warm)}
+.faction-card[data-kind=crew] .faction-icon{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.faction-card.is-loose .faction-icon{background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--quiet)}
+.faction-title{display:grid;gap:2px;min-width:0;flex:1}
+.faction-title strong{font:normal 15px/1.2 var(--serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.faction-title small{color:var(--quiet);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.faction-chevron{display:grid;color:var(--quiet)}
+.faction-card-body{overflow:hidden}
+.faction-info{display:grid;gap:8px;padding:0 12px 10px}
+.faction-info p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}
+.faction-members{display:grid;gap:1px;margin:0;padding:0 6px 8px;list-style:none}
+.faction-members button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 8px;border:0;border-radius:8px;background:transparent;color:var(--ink);text-align:left;cursor:pointer}
+.faction-members button:hover{background:color-mix(in srgb,var(--gold) 8%,transparent)}
+.faction-members button[aria-pressed=true]{background:color-mix(in srgb,var(--gold) 14%,transparent)}
+.faction-members button>span{display:grid;gap:1px;min-width:0;flex:1}
+.faction-members strong{font-size:12.5px;font-weight:600}
+.faction-members small{color:var(--quiet);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.faction-members .is-former{opacity:.62}
+.member-tag{padding:2px 6px;border-radius:999px;background:color-mix(in srgb,var(--gold) 18%,transparent);color:var(--gold);font:700 9px/1.3 var(--sans);font-style:normal;text-transform:uppercase;letter-spacing:.04em}
+.faction-groups.is-compact .faction-card-head{padding:8px 10px}
+.faction-groups.is-compact .faction-title strong{font-size:13.5px}
+.people-index .faction-groups{overflow:auto;min-height:0}

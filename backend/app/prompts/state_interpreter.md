@@ -11,8 +11,9 @@ IDENTITY RULES (most important)
 7. Keep it short: at most 8 state_changes, 3 events, 3 new_memories, and 3 knowledge_changes per turn. Skip trivia.
 
 OPERATIONS — each is {"kind":..., "character_id"?:..., "name"?:..., "value":{...}, "certainty":"CONFIRMED|OBSERVED|INFERRED|RUMOR|BELIEF", "visibility":"PLAYER_KNOWN|GM_ONLY"}
-- CREATE_CHARACTER: name, value {role, gender?, known_facts:[...], aliases?:[...], visual?:{apparent_age, build, face, hair, eyes, skin, clothing, features:[...]}} — fill visual from what the narration shows
-- UPDATE_CHARACTER: character_id, value {role?, status?, location?, known_facts?:[new facts only], aliases?:[...], visual?:{clothing?, current_state?}}
+- CREATE_CHARACTER: name, value {role, gender?, known_facts:[...], aliases?:[...], affiliations?:[{name, kind, role?, status?}], visual?:{apparent_age, build, face, hair, eyes, skin, clothing, features:[...]}} — fill visual from what the narration shows
+- UPDATE_CHARACTER: character_id, value {role?, status?, location?, known_facts?:[new facts only], aliases?:[...], affiliations?:[{name, kind, role?, status?}], visual?:{clothing?, current_state?}}
+  affiliations: groups the person belongs to, only when the story establishes it — a faction, nation/country, city, guild, religion, noble house, military unit, government body, or a crew around one leader. kind is one of faction|nation|city|guild|religion|house|military|government|crew; status member|leader|former.
 - REVEAL_CHARACTER_IDENTITY: character_id, value {canonical_name, role?, aliases?:[...]}
 - MOVE_CHARACTER: character_id or name "player", value {location}
 - CHANGE_CHARACTER_STATUS: character_id or name "player", value {status, injuries?:[...]}
@@ -22,7 +23,8 @@ OPERATIONS — each is {"kind":..., "character_id"?:..., "name"?:..., "value":{.
 - CREATE_OBJECTIVE: name, value {description}. UPDATE_OBJECTIVE: objective_id, value {status:"completed"|"failed"|"abandoned"}
 - GAIN_ABILITY: name, value {description, source} — a power the player (or character_id) newly gains on screen. LOSE_ABILITY: name
 - CREATE_SECRET / REVEAL_SECRET: name, value {content}
-- CREATE_FACTION: name, value {description}
+- CREATE_FACTION: name, value {description, kind, aliases?:[...]} — any lasting group: faction, nation, city, guild, religion, house, military, government, crew
+- CHANGE_FACTION_RELATIONSHIP: value {from, to, relation:"allied|hostile|rival|at war|trade partners|vassal|neutral", details?}
 - UPDATE_MONEY: value {amount, currency} or {delta, currency} — only explicit amounts
 
 relationship_changes: {"from_id" or "from", "to_id" or "to", "deltas":{"trust":-10}, "reason":"the concrete event"}

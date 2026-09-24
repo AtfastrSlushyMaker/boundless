@@ -76,6 +76,13 @@ export type Character = {
   first_seen_turn_index?: number | null; last_seen_turn_index?: number | null;
 };
 export type Location = { id: string; name: string; region: string; description: string; aliases?: string[] };
+export type FactionKind = "faction" | "nation" | "city" | "guild" | "religion" | "house" | "military" | "government" | "crew";
+export type Affiliation = { name: string; kind: FactionKind; role?: string; status?: "member" | "leader" | "former"; source?: "player" | "story" | "inferred" };
+export type Faction = {
+  id: string; name: string; kind: FactionKind; description: string; motives: string[]; aliases: string[];
+  members: Array<{ id: string; role: string; status: "member" | "leader" | "former" }>;
+  relations: Array<{ to: string; relation: string; details: string }>;
+};
 export type Item = { id: string; name: string; quantity: number; condition: string; significance: string; aliases?: string[] };
 export type Objective = {
   id: string; title: string; status: "active" | "completed" | "failed" | "abandoned" | "superseded" | string;
@@ -126,7 +133,7 @@ export type CampaignDetail = {
   current_location: string;
   characters: Character[];
   locations: Location[];
-  factions: Array<Record<string, unknown>>;
+  factions: Faction[];
   items: Item[];
   inventory: Item[];
   relationships: Relationship[];
@@ -231,6 +238,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const json = (method: string, payload: unknown): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
 
 export const api = {
+  syncFactions: (campaignId: string, branchId: string) =>
+    request<{ stats: { linked: number; groups: number }; campaign: CampaignDetail }>(`/api/campaigns/${campaignId}/factions/sync?branch_id=${branchId}`, { method: "POST" }),
   notes: (campaignId: string) => request<{ notes: CampaignNote[] }>(`/api/campaigns/${campaignId}/notes`),
   createNote: (campaignId: string, branchId: string, payload: NoteWrite) =>
     request<CampaignNote>(`/api/campaigns/${campaignId}/notes?branch_id=${branchId}`, json("POST", payload)),
@@ -262,7 +271,7 @@ export const api = {
     return request<{ done: boolean; avatar_url: string }>(`/api/campaigns/${campaignId}/characters/${characterId}/avatar/upload?branch_id=${branchId}`, { method: "POST", body });
   },
   updateCharacter: (campaignId: string, branchId: string, characterId: string, payload: {
-    role: string; personality: string; appearance: string; sex: string; gender: string; pronouns: string;
+    role: string; personality: string; appearance: string; sex: string; gender: string; pronouns: string; affiliations?: string[];
   }) => request<CampaignDetail>(`/api/campaigns/${campaignId}/characters/${characterId}?branch_id=${branchId}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   }),

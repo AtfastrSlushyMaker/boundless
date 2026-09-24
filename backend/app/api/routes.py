@@ -28,6 +28,7 @@ from app.db.models import (
     Checkpoint,
     Event,
     Faction,
+    FactionRelationship,
     ImageProfile,
     Item,
     Location,
@@ -213,6 +214,8 @@ async def _detail(session: AsyncSession, campaign: Campaign, branch: Branch) -> 
         Faction.branch_id == branch.id, Faction.visibility == "PLAYER_KNOWN").order_by(Faction.name))).all())
     items = list((await session.scalars(select(Item).where(
         Item.branch_id == branch.id, Item.visibility == "PLAYER_KNOWN").order_by(Item.name))).all())
+    faction_relations = list((await session.scalars(select(FactionRelationship).where(
+        FactionRelationship.branch_id == branch.id))).all())
     objectives = list((await session.scalars(select(Objective).where(
         Objective.branch_id == branch.id, Objective.visibility == "PLAYER_KNOWN").order_by(Objective.status, Objective.title))).all())
     events = list((await session.scalars(select(Event).where(
@@ -258,7 +261,7 @@ async def _detail(session: AsyncSession, campaign: Campaign, branch: Branch) -> 
         "active_branch_id": campaign.active_branch_id, "branch": branch,
         "branches": branches, "turns": visible_turns, "current_state": branch.current_state,
         "current_location": current_location, "characters": character_rows, "locations": locations,
-        "factions": factions,
+        "factions": _faction_rows(factions, characters, faction_relations),
         "inventory": [row for row in items if normalize_reference(row.owner_name) in {player_key, "player"}],
         "items": items, "relationships": relationship_data, "objectives": objectives,
         "events": events, "memories": memories, "canon_rules": rules,
@@ -404,6 +407,27 @@ async def write_model_settings(payload: ModelSettingsUpdate, session: AsyncSessi
     await session.commit()
     await session.refresh(profile)
     return _model_status(profile)
+
+
+def _faction_rows(factions, characters, relations) -> list[dict]:
+    """Each group with its kind, its members (by id, with their role and status), and its stance to other groups."""
+    rows = []
+    for faction in factions:
+        names = {normalize_reference(name) for name in [faction.name, *(faction.aliases or [])]}
+        members = []
+        for person in characters:
+            for entry in (person.attributes or {}).get("affiliations") or []:
+                if isinstance(entry, dict) and normalize_reference(entry.get("name", "")) in names:
+                    members.append({"id": str(person.id), "role": entry.get("role", ""), "status": entry.get("status", "member")})
+                    break
+        stance = [{"to": row.to_faction if normalize_reference(row.from_faction) in names else row.from_faction,
+                   "relation": row.relation, "details": row.details}
+                  for row in relations if row.relation and row.relation != "unknown"
+                  and (normalize_reference(row.from_faction) in names or normalize_reference(row.to_faction) in names)]
+        rows.append({"id": str(faction.id), "name": faction.name, "kind": faction.kind or "faction",
+                     "description": faction.description, "motives": faction.motives or [], "aliases": faction.aliases or [],
+                     "members": members, "relations": stance})
+    return rows
 
 
 async def _roles_payload(session: AsyncSession) -> dict:
@@ -697,6 +721,19 @@ async def update_character(campaign_id: UUID, character_id: UUID, branch_id: UUI
             attributes[key] = value
         else:
             attributes.pop(key, None)
+    if payload.affiliations is not None:
+        # The player's list is final: groups they removed are dropped, the rest become player-owned.
+        from app.services.affiliations import ensure_faction, normalize_affiliations
+        wanted = {normalize_reference(name) for name in payload.affiliations}
+        kept = [dict(entry, source="player") for entry in attributes.get("affiliations") or []
+                if isinstance(entry, dict) and normalize_reference(entry.get("name", "")) in wanted]
+        kept_keys = {normalize_reference(entry["name"]) for entry in kept}
+        added = [entry for entry in normalize_affiliations(payload.affiliations, source="player")
+                 if normalize_reference(entry["name"]) not in kept_keys]
+        attributes["affiliations"] = kept + added
+        for entry in added:
+            faction = await ensure_faction(session, campaign, branch, entry["name"], kind=entry["kind"])
+            entry["name"], entry["kind"] = faction.name, faction.kind
     character.attributes = attributes
     await session.commit()
     return await _detail(session, campaign, branch)
@@ -795,6 +832,21 @@ async def refresh_from_story(campaign_id: UUID, branch_id: UUID | None = None, s
     return {"changes": notes, "campaign": await _detail(session, campaign, branch)}
 
 
+@router.post("/campaigns/{campaign_id}/factions/sync")
+async def sync_campaign_factions(campaign_id: UUID, branch_id: UUID | None = None, session: AsyncSession = Depends(get_session)):
+    """Regroup people into factions, nations, guilds and crews using the story so far."""
+    from app.services.affiliations import sync_affiliations
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    try:
+        provider = (await route(session, "state", provider_for_profile)).provider
+    except Exception:  # noqa: BLE001 - deterministic grouping still runs without a model
+        provider = None
+    stats = await sync_affiliations(session, campaign, branch, provider)
+    await session.commit()
+    return {"stats": stats, "campaign": await _detail(session, campaign, branch)}
+
+
 @router.post("/campaigns/{campaign_id}/reindex-people")
 async def reindex_campaign_people(campaign_id: UUID, branch_id: UUID | None = None,
                                   session: AsyncSession = Depends(get_session)):
@@ -820,6 +872,11 @@ async def reindex_campaign_people(campaign_id: UUID, branch_id: UUID | None = No
             Character.branch_id == branch.id, Character.name.ilike(campaign.protagonist_name)))
         if protagonist:
             protagonist.status = "alive"
+    from app.services.affiliations import sync_affiliations
+    try:
+        await sync_affiliations(session, campaign, branch, (await route(session, "state", provider_for_profile)).provider)
+    except Exception:  # noqa: BLE001 - grouping must never block recovering people
+        logger.warning("Faction regroup during people recovery failed", exc_info=True)
     if branch.head_turn_id:
         head = await session.get(Turn, branch.head_turn_id)
         if head:

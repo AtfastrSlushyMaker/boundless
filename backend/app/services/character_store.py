@@ -44,6 +44,7 @@ RESERVED_VALUE_KEYS = {
     "role", "personality", "status", "motivations", "attributes", "known_facts", "facts", "aliases", "alias",
     "name", "canonical_name", "title", "location", "character_id", "id", "previous_name", "injuries",
     "conditions", "condition", "physical_status", "knowledge", "visual", "visual_identity",
+    "affiliations", "faction", "faction_name", "allegiance", "nation", "country", "organization", "guild",
 }
 
 
@@ -278,6 +279,13 @@ async def merge_character_values(session: AsyncSession, character: Character, va
         attributes["visual_identity"] = merge_visual(attributes.get("visual_identity"), visual)
     if isinstance(value.get("location"), str) and not is_unknown(value["location"]):
         attributes["location"] = value["location"][:160]
+    groups = [value.get(key) for key in ("affiliations", "faction", "faction_name", "allegiance", "nation", "country",
+                                          "organization", "guild") if value.get(key)]
+    if groups:
+        from app.services.affiliations import merge_affiliations, normalize_affiliations
+        flat_groups = [entry for group in groups for entry in (group if isinstance(group, list) else [group])]
+        attributes["affiliations"] = merge_affiliations(
+            attributes.get("affiliations"), normalize_affiliations(flat_groups, source="story", turn_index=turn_index))
     character.attributes = attributes
     character.provenance = levels
     if visibility == "PLAYER_KNOWN" and character.visibility != "PLAYER_KNOWN":

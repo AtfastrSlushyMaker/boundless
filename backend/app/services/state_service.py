@@ -896,12 +896,19 @@ class StateApplier:
             return False
         faction = await self.session.scalar(select(Faction).where(Faction.branch_id == self.branch.id, Faction.name.ilike(name)))
         motives = [str(part)[:300] for part in value.get("motives", [])[:20]] if isinstance(value.get("motives"), list) else []
+        from app.services.affiliations import KINDS, kind_for
+        kind = str(value.get("kind") or "").casefold()
+        kind = kind if kind in KINDS else kind_for(name, str(value.get("description") or ""))
+        aliases = [str(alias)[:160] for alias in value.get("aliases", [])[:8]] if isinstance(value.get("aliases"), list) else []
         if faction is None:
             self.session.add(Faction(campaign_id=self.campaign.id, branch_id=self.branch.id, name=name,
                                      description=str(value.get("description") or "")[:3000], motives=motives,
-                                     visibility=operation.get("visibility", "PLAYER_KNOWN")))
+                                     kind=kind, aliases=aliases, visibility=operation.get("visibility", "PLAYER_KNOWN")))
             self.change("faction", f"Faction: {name}")
         else:
+            if faction.kind in ("", "faction") and kind != "faction":
+                faction.kind = kind
+            faction.aliases = list(dict.fromkeys([*(faction.aliases or []), *aliases]))[:12]
             if isinstance(value.get("description"), str) and not is_unknown(value["description"]):
                 faction.description = value["description"][:3000]
             faction.motives = list(dict.fromkeys([*(faction.motives or []), *motives]))[:20]

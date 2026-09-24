@@ -57,6 +57,7 @@ class CharacterUpdate(BaseModel):
     sex: str = Field(max_length=60)
     gender: str = Field(max_length=60)
     pronouns: str = Field(max_length=60)
+    affiliations: list[str] | None = Field(default=None, max_length=12)
 
 
 class RelationshipUpdate(BaseModel):

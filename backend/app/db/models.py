@@ -450,6 +450,9 @@ class Faction(Base):
     name: Mapped[str] = mapped_column(String(160))
     description: Mapped[str] = mapped_column(Text, default="")
     motives: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    # faction, nation, city, guild, religion, house, military, government, crew
+    kind: Mapped[str] = mapped_column(String(24), default="faction")
+    aliases: Mapped[list[str]] = mapped_column(JSONB, default=list)
     visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
 
 
