@@ -58,11 +58,23 @@ MacBook: Next.js + FastAPI + PostgreSQL + MLX text
 Windows desktop: ComfyUI + NVIDIA GPU, port 8188
 ```
 
-The Windows machine inspected for this setup already has the official ComfyUI checkout at `C:\Users\malek\ComfyUI`, a CUDA-enabled virtual environment, and the `juggernautXL_Ragnarok.safetensors` checkpoint (about 6.62 GB). It does not need a second installation or checkpoint download. ComfyUI should listen on its Tailscale interface or a trusted LAN interface and have a firewall rule limited to that interface and trusted peers. Do not expose port 8188 to the public internet. This task did not start the service or change the Windows firewall; those remote changes need explicit approval after the automatic approval review blocked them.
+The configured Windows desktop uses its existing official ComfyUI checkout at `C:\Users\malek\ComfyUI`, CUDA virtual environment, and `juggernautXL_Ragnarok.safetensors` checkpoint (about 6.62 GB). No second installation or checkpoint download was needed. A Windows Scheduled Task named `Boundless ComfyUI` starts ComfyUI at logon. It listens only on the desktop's Tailscale IPv4 address on port 8188. The `Boundless ComfyUI (Tailscale only)` firewall rule is limited to that local address, the Tailscale interface, the Private profile, and remote Tailscale peers (`100.64.0.0/10`). LAN access is not enabled on this desktop. Other users can configure their own trusted LAN or Tailscale endpoint in Settings; do not expose ComfyUI to the public internet.
+
+From PowerShell on that Windows desktop, the helpers in `C:\Users\malek\ComfyUI\boundless` are:
+
+```powershell
+& "$env:USERPROFILE\ComfyUI\boundless\Start-ComfyUI.ps1"
+& "$env:USERPROFILE\ComfyUI\boundless\Stop-ComfyUI.ps1"
+& "$env:USERPROFILE\ComfyUI\boundless\Restart-ComfyUI.ps1"
+& "$env:USERPROFILE\ComfyUI\boundless\View-ComfyUI-Logs.ps1" -Tail 100
+tailscale ip -4
+```
+
+Enter `http://<desktop-tailscale-ip>:8188` in Settings, or another URL reachable from **FastAPI** for a different ComfyUI host. The test button discovers installed checkpoints and reports the GPU and queue state. Add another `.safetensors` checkpoint to the ComfyUI `models/checkpoints` directory, then test the connection again to select it. The current checkpoint and endpoint live in Boundless settings, not application code. The Windows task and firewall rule can be removed independently of Boundless.
 
 Once the server is running, select **ComfyUI**, enter its reachable URL, click **Test connection**, choose a checkpoint from the discovered list, then save. The default workflow is [boundless_portrait_v1.json](backend/app/workflows/boundless_portrait_v1.json): an SDXL checkpoint loader, positive and negative prompts, 768 × 1024 latent, KSampler, VAE decode, and SaveImage. Size, steps, guidance, sampler, and checkpoint are configurable. The positive prompt uses the character's structured visual identity, current appearance, role, faction, and campaign mood. It does not send a full transcript. Stable seeds keep regeneration consistent; **New seed** deliberately changes the seed.
 
-Generated images are copied into `data/portraits/{campaign_id}/{character_id}/{portrait_id}.{png,jpg,webp}` for native development, or the Docker `api_portraits` volume. The database stores provider, prompt, model, seed, parameters, status, and relative image path. Jobs can be queued, generating, complete, failed, or cancelled. Offline servers back off without blocking story turns. If you want to avoid sending character details to a cloud service, leave AI Horde disabled and do not use it as a fallback. Perchance Assisted is a manual save-and-upload flow.
+Generated images are copied into `data/portraits/{campaign_id}/{character_id}/{portrait_id}.{png,jpg,webp}` for native development, or the Docker `api_portraits` volume. Compose initializes this volume for the non-root API user before startup. The database stores provider, prompt, model, seed, parameters, status, and relative image path. Jobs can be queued, generating, complete, failed, or cancelled. Offline servers back off without blocking story turns. If you want to avoid sending character details to a cloud service, leave AI Horde disabled and do not use it as a fallback. Perchance Assisted is a manual save-and-upload flow.
 
 ## Model options
 

@@ -1,9 +1,13 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from sqlalchemy import select
 
+from app.db.models import Campaign, Character, PortraitJob
+from app.db.session import SessionLocal
 from app.services.image_provider import (
     ComfyUIImageProvider,
     importance_for,
@@ -15,6 +19,7 @@ from app.services.image_provider import (
     workflow_for,
 )
 from app.services.portrait_jobs import profile_dict
+from tests.conftest import new_campaign
 
 
 def character(**attributes):
@@ -54,12 +59,13 @@ def test_prompt_uses_canonical_visual_identity_and_campaign_mood():
 
 
 def test_workflow_is_reproducible_and_configurable():
-    result = workflow_for(profile(), "hero portrait", "watermark", 42)
+    result = workflow_for(profile(), "hero portrait", "watermark", 42, "job-42")
     assert result["1"]["inputs"]["ckpt_name"] == "portrait.safetensors"
     assert result["2"]["inputs"]["text"] == "hero portrait"
     assert result["5"]["inputs"]["seed"] == 42
     assert result["4"]["inputs"]["height"] == 1024
     assert result["7"]["class_type"] == "SaveImage"
+    assert result["7"]["inputs"]["filename_prefix"] == "BoundlessPortrait_job-42"
 
 
 def test_local_storage_rejects_invalid_bytes_and_path_traversal(tmp_path, monkeypatch):
@@ -144,3 +150,82 @@ async def test_comfy_timeout(monkeypatch):
         transport=httpx.MockTransport(timeout), **kwargs))
     with pytest.raises(httpx.ReadTimeout):
         await ComfyUIImageProvider("http://comfy.local").generate({})
+
+
+@pytest.mark.asyncio
+async def test_recurring_portrait_retries_offline_then_completes(client, scripted, monkeypatch, tmp_path):
+    from app.services import portrait_jobs
+    from app.services.image_provider import settings
+
+    world = await new_campaign(client, "I am Ada, an adult cartographer in a fantasy port.")
+    campaign_id, branch_id = UUID(world["id"]), UUID(world["branch"]["id"])
+    image_profile = SimpleNamespace(provider="comfyui", enabled=True, base_url="http://comfy.local",
+        checkpoint="portrait.safetensors", workflow="boundless_portrait_v1", width=768, height=1024,
+        steps=28, cfg=6.5, sampler="dpmpp_2m", scheduler="karras", auto_recurring=True,
+        auto_major=False, auto_companion=False, auto_minor=False)
+
+    async def configured(_session):
+        return image_profile
+
+    monkeypatch.setattr(portrait_jobs, "image_profile", configured)
+    monkeypatch.setattr(settings, "portrait_storage_dir", str(tmp_path))
+
+    async with SessionLocal() as session:
+        campaign = await session.get(Campaign, campaign_id)
+        recurring = Character(campaign_id=campaign_id, branch_id=branch_id, name="Mara",
+                              role="Map seller", importance="RECURRING", visibility="PLAYER_KNOWN",
+                              attributes={"visual_identity": {"hair": "silver braid"}})
+        minor = Character(campaign_id=campaign_id, branch_id=branch_id, name="Passerby",
+                          role="Traveller", importance="MINOR", visibility="PLAYER_KNOWN")
+        session.add_all([recurring, minor])
+        await session.commit()
+        await portrait_jobs.queue_automatic_portraits(session, campaign, branch_id)
+        jobs = (await session.scalars(select(PortraitJob).where(PortraitJob.campaign_id == campaign_id))).all()
+        assert len(jobs) == 1
+        assert jobs[0].character_id == recurring.id
+        assert jobs[0].status == "QUEUED"
+        assert "silver braid" in jobs[0].metadata_json["prompt"]
+        job_id = jobs[0].id
+        jobs[0].created_at = datetime.now(UTC) - timedelta(minutes=30)
+        await session.commit()
+
+    class FakeComfy:
+        offline = True
+
+        def __init__(self, _base_url):
+            pass
+
+        async def generate(self, workflow):
+            assert workflow["7"]["inputs"]["filename_prefix"] == (
+                f"BoundlessPortrait_{job_id}_{1 if not self.offline else 0}")
+            if self.offline:
+                raise httpx.ConnectError("offline")
+            return "remote-job"
+
+        async def result(self, prompt_id):
+            assert prompt_id == "remote-job"
+            return b"\x89PNG\r\n\x1a\nportrait"
+
+    monkeypatch.setattr(portrait_jobs, "ComfyUIImageProvider", FakeComfy)
+    await portrait_jobs.process_one_portrait()
+    async with SessionLocal() as session:
+        job = await session.get(PortraitJob, job_id)
+        assert job.status == "QUEUED" and job.attempts == 1
+        job.next_attempt_at = datetime.now(UTC)
+        await session.commit()
+
+    FakeComfy.offline = False
+    await portrait_jobs.process_one_portrait()
+    async with SessionLocal() as session:
+        job = await session.get(PortraitJob, job_id)
+        assert job.status == "GENERATING" and job.metadata_json["started_at"]
+        job.next_attempt_at = datetime.now(UTC)
+        await session.commit()
+    await portrait_jobs.process_one_portrait()
+    async with SessionLocal() as session:
+        job = await session.get(PortraitJob, job_id)
+        person = await session.get(Character, job.character_id)
+        assert job.status == "COMPLETE"
+        assert (tmp_path / job.image_path).is_file()
+        assert person.attributes["avatar_url"] == f"/api/portraits/{job.id}"
+        assert "avatar_job" not in person.attributes

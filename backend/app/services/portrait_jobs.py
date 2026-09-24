@@ -118,9 +118,19 @@ async def process_one_portrait() -> None:
             job.status = "CANCELLED"
             await session.commit()
             return
-        if job.status == "GENERATING" and now - job.created_at > timedelta(minutes=20):
+        started_at = (job.metadata_json or {}).get("started_at")
+        try:
+            started = datetime.fromisoformat(started_at) if isinstance(started_at, str) else job.created_at
+        except ValueError:
+            started = job.created_at
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=UTC)
+        if job.status == "GENERATING" and now - started > timedelta(minutes=20):
             job.status = "FAILED"
             job.error = "Portrait generation timed out. Retry from the character panel."
+            attributes = dict(character.attributes or {})
+            attributes.pop("avatar_job", None)
+            character.attributes = attributes
             await session.commit()
             return
         try:
@@ -129,11 +139,13 @@ async def process_one_portrait() -> None:
                     client = ComfyUIImageProvider(profile.base_url)
                     meta = job.metadata_json
                     job.remote_job_id = await client.generate(workflow_for(
-                        profile, meta["prompt"], meta["negative_prompt"], meta["seed"]))
+                        profile, meta["prompt"], meta["negative_prompt"], meta["seed"],
+                        f"{job.id}_{job.attempts}"))
                 else:
                     job.remote_job_id = await request_horde(job.metadata_json["prompt"])
                 job.status = "GENERATING"
                 job.error = ""
+                job.metadata_json = {**(job.metadata_json or {}), "started_at": now.isoformat()}
                 job.next_attempt_at = now + timedelta(seconds=5)
             else:
                 image = await (ComfyUIImageProvider(profile.base_url).result(job.remote_job_id)

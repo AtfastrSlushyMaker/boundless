@@ -19,7 +19,7 @@ COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
 RUN groupadd --gid 10001 boundless \
     && useradd --uid 10001 --gid boundless --home-dir /app --no-create-home boundless \
-    && install -d -m 700 -o 10001 -g 10001 /app/.secrets
+    && install -d -m 700 -o 10001 -g 10001 /app/.secrets /app/data/portraits
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \

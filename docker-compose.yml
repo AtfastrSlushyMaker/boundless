@@ -46,6 +46,15 @@ services:
       db:
         condition: service_healthy
 
+  portrait-init:
+    image: boundless-api:local
+    build: *api-build
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 10001:10001 /app/data/portraits && chmod 700 /app/data/portraits"]
+    restart: "no"
+    volumes:
+      - api_portraits:/app/data/portraits
+
   api:
     image: boundless-api:local
     build: *api-build
@@ -65,6 +74,8 @@ services:
       db:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      portrait-init:
         condition: service_completed_successfully
 
   web:

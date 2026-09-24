@@ -95,7 +95,7 @@ def new_seed() -> int:
     return secrets.randbits(63)
 
 
-def workflow_for(profile, positive: str, negative: str, seed: int) -> dict:
+def workflow_for(profile, positive: str, negative: str, seed: int, output_tag: str = "") -> dict:
     workflow = json.loads(WORKFLOW_PATH.read_text(encoding="utf-8"))
     workflow["1"]["inputs"]["ckpt_name"] = profile.checkpoint
     workflow["2"]["inputs"]["text"] = positive
@@ -103,6 +103,8 @@ def workflow_for(profile, positive: str, negative: str, seed: int) -> dict:
     workflow["4"]["inputs"].update(width=profile.width, height=profile.height)
     workflow["5"]["inputs"].update(seed=seed, steps=profile.steps, cfg=profile.cfg,
                                     sampler_name=profile.sampler, scheduler=profile.scheduler)
+    if output_tag:
+        workflow["7"]["inputs"]["filename_prefix"] = f"BoundlessPortrait_{output_tag}"
     return workflow
 
 
@@ -111,7 +113,7 @@ class ComfyUIImageProvider:
         self.base_url = validate_endpoint(base_url)
 
     async def health_check(self) -> dict:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False, trust_env=False) as client:
             response = await client.get(f"{self.base_url}/system_stats")
             response.raise_for_status()
             stats = response.json()
@@ -128,7 +130,7 @@ class ComfyUIImageProvider:
                 "queue_pending": len(queued.get("queue_pending", []))}
 
     async def get_models(self) -> list[str]:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False, trust_env=False) as client:
             response = await client.get(f"{self.base_url}/object_info/CheckpointLoaderSimple")
             response.raise_for_status()
             return self._checkpoint_names(response.json())
@@ -144,7 +146,7 @@ class ComfyUIImageProvider:
         return [str(name) for name in choices[0]] if choices and isinstance(choices[0], list) else []
 
     async def generate(self, workflow: dict) -> str:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False, trust_env=False) as client:
             response = await client.post(f"{self.base_url}/prompt", json={"prompt": workflow})
             response.raise_for_status()
             data = response.json()
@@ -154,7 +156,7 @@ class ComfyUIImageProvider:
         return prompt_id
 
     async def result(self, prompt_id: str) -> bytes | None:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=False, trust_env=False) as client:
             response = await client.get(f"{self.base_url}/history/{prompt_id}")
             response.raise_for_status()
             history = response.json()

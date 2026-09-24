@@ -195,7 +195,7 @@
 .person-detail-head h3{font-size:26px}
 .portrait-action{display:block;width:100%;min-height:34px;margin:0 0 5px;border:1px solid var(--line);border-radius:2px;background:var(--paper);color:var(--ink);font-size:11px}
 .portrait-action:hover:not(:disabled){border-color:var(--gold);background:var(--panel)}
-.portrait-note{margin:0 0 15px!important;color:var(--quiet);font-size:10px;line-height:1.4}
+.portrait-note{margin:0 0 15px!important;color:var(--muted);font-size:12px;line-height:1.5}
 .portrait-error{color:var(--danger);font-size:11px}
 .world-row:has(.menu-popover){z-index:15}
 .menu-popover{min-width:190px;right:0;top:38px;background:var(--deep);border-color:var(--line);box-shadow:0 12px 24px #0008}
