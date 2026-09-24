@@ -572,6 +572,17 @@ async def generate_character_avatar(campaign_id: UUID, character_id: UUID, branc
     campaign = await _campaign(session, campaign_id)
     await _branch(session, campaign, branch_id)
     character = await _known_character(session, campaign_id, branch_id, character_id)
+    from app.services.post_turn import describe_and_store
+    from app.services.visual_identity import needs_visual
+    if needs_visual(character):
+        # Build the look from the story first, so the portrait matches the narration.
+        branch = await session.get(Branch, branch_id)
+        try:
+            routed = await route(session, "state", provider_for_profile)
+            await describe_and_store(session, campaign, character, routed.provider,
+                                     await history_for_branch(session, branch.head_turn_id, limit=80))
+        except Exception:
+            logger.warning("Visual description failed before portrait generation", exc_info=True)
     try:
         job = await enqueue_portrait(session, campaign, character,
                                      new_identity_seed=bool(payload and payload.new_seed))

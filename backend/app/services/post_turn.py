@@ -151,14 +151,42 @@ async def _profile(session: AsyncSession, job: PostTurnJob, factory: Callable) -
             checkpoint.state_snapshot = snapshot
 
 
-async def _visuals(session: AsyncSession, job: PostTurnJob, factory: Callable) -> None:
-    """Give people who just appeared a visual identity the narration supports, before portraits queue."""
+async def describe_and_store(session: AsyncSession, campaign: Campaign, person: Character, provider, turns) -> bool:
+    """Build a character's visual identity from narration that mentions them. Returns True when stored."""
     import re
 
-    from app.db.models import CharacterAlias, Turn
-    from app.services.context_builder import history_for_branch
+    from app.db.models import CharacterAlias
     from app.services.narration import clean_history_narration
-    from app.services.visual_identity import describe_character, merge_visual, needs_visual
+    from app.services.visual_identity import describe_character, merge_visual
+
+    names = [person.name, *(row.alias for row in (await session.scalars(select(CharacterAlias).where(
+        CharacterAlias.character_id == person.id))).all())]
+    excerpts: list[str] = []
+    for turn in turns:
+        text = clean_history_narration(turn.gm_response or "")
+        follow = False
+        for sentence in re.split(r"(?<=[.!?])\s+", text):
+            named = any(name and len(name) > 2 and name.casefold() in sentence.casefold() for name in names)
+            if named or (follow and sentence.lower().startswith(("she ", "he ", "they ", "her ", "his ", "their "))):
+                excerpts.append(sentence[:400])
+            follow = named or (follow and sentence.lower().startswith(("she ", "he ", "they ", "her ", "his ", "their ")))
+    if not excerpts and not (person.attributes or {}).get("known_facts"):
+        return False
+    tone = str((campaign.constitution or {}).get("tone") or (campaign.theme_profile or {}).get("family") or "")
+    proposed = await describe_character(provider, name=person.name, role=person.role or "",
+                                        facts=list((person.attributes or {}).get("known_facts") or []),
+                                        excerpts=excerpts[-12:], tone=tone)
+    attributes = dict(person.attributes or {})
+    attributes["visual_identity"] = merge_visual(attributes.get("visual_identity"), proposed)
+    person.attributes = attributes
+    return True
+
+
+async def _visuals(session: AsyncSession, job: PostTurnJob, factory: Callable) -> None:
+    """Give people who just appeared a visual identity the narration supports, before portraits queue."""
+    from app.db.models import Turn
+    from app.services.context_builder import history_for_branch
+    from app.services.visual_identity import needs_visual
 
     campaign = await session.get(Campaign, job.campaign_id)
     branch = await session.get(Branch, job.branch_id)
@@ -175,30 +203,8 @@ async def _visuals(session: AsyncSession, job: PostTurnJob, factory: Callable) -
     if not candidates:
         return
     routed = await route(session, "state", factory)
-    tone = str((campaign.constitution or {}).get("tone") or (campaign.theme_profile or {}).get("family") or "")
     for person in candidates:
-        names = [person.name, *(row.alias for row in (await session.scalars(select(CharacterAlias).where(
-            CharacterAlias.character_id == person.id))).all())]
-        excerpts = []
-        for turn in turns:
-            text = clean_history_narration(turn.gm_response or "")
-            for sentence in re.split(r"(?<=[.!?])\s+", text):
-                if any(name and name.casefold() in sentence.casefold() for name in names) or \
-                        (excerpts and len(excerpts[-1]) < 1600 and sentence.lower().startswith(("she ", "he ", "they ", "her ", "his "))):
-                    excerpts.append(sentence[:400])
-        if not excerpts:
-            continue
-        proposed = await describe_character(routed.provider, name=person.name, role=person.role or "",
-                                            facts=list((person.attributes or {}).get("known_facts") or []),
-                                            excerpts=excerpts[-12:], tone=tone)
-        attributes = dict(person.attributes or {})
-        attributes["visual_identity"] = merge_visual(attributes.get("visual_identity"), proposed)
-        if not attributes.get("appearance"):
-            visual = attributes["visual_identity"]
-            summary = ", ".join(str(visual[key]) for key in ("apparent_age", "build", "hair", "eyes", "clothing") if visual.get(key))
-            if summary:
-                attributes["appearance"] = summary[:600]
-        person.attributes = attributes
+        await describe_and_store(session, campaign, person, routed.provider, turns)
 
 
 async def _embeddings(session: AsyncSession, job: PostTurnJob, factory: Callable) -> None:

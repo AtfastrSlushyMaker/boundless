@@ -3,9 +3,9 @@
 import Image from "next/image";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { FormEvent, PointerEvent, WheelEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, PointerEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AtlasArtwork } from "@/components/AtlasArtwork";
+import { PortraitButton } from "@/components/PortraitLightbox";
 import { api, portraitUrl } from "@/lib/api";
 import type { CampaignDetail, Character, Importance, Relationship, RelationshipEvent } from "@/lib/api";
 
@@ -186,7 +186,6 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
   const [profileDraft, setProfileDraft] = useState<ProfileDraft>({ role: "", personality: "", appearance: "", sex: "", gender: "", pronouns: "" });
   const [relationDraft, setRelationDraft] = useState<RelationDraft>({ trust: "", respect: "", fear: "", hostility: "", status: "", summary: "" });
   const graphScrollRef = useRef<HTMLDivElement>(null);
-  const panRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
   const choosePerson = (id: string) => { setSelectedId(id); setSelectedEdgeId(null); setShowAllFacts(false); setEditing(null); setAvatarError(""); };
 
   const protagonist = campaign.characters.find((person) => person.name === campaign.protagonist_name);
@@ -356,72 +355,168 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
     return () => window.removeEventListener("keydown", onKey);
   }, [view]);
 
+  // ── Camera: a transform (pan + zoom) over a fixed-size world, driven by native listeners
+  // so trackpad pinch and two-finger pans never fall through to the page.
+  const layoutKey = `boundless:graph-layout:${campaign.id}:${campaign.branch.id}`;
+  const [overrides, setOverrides] = useState<Record<string, { x: number; y: number }>>({});
   useEffect(() => {
-    if (view !== "graph") return;
-    const scroll = graphScrollRef.current;
-    if (!scroll) return;
-    scroll.scrollLeft = Math.max(0, (scroll.scrollWidth - scroll.clientWidth) / 2);
-    scroll.scrollTop = Math.max(0, (scroll.scrollHeight - scroll.clientHeight) / 2);
-  }, [view, graphWidth, graphHeight]);
-
-  const zoomAt = (next: number, clientX?: number, clientY?: number) => {
-    const scroll = graphScrollRef.current;
-    const clamped = Math.max(0.45, Math.min(1.8, Number(next.toFixed(3))));
-    if (!scroll || clamped === zoom) return;
-    const rect = scroll.getBoundingClientRect();
-    const x = clientX === undefined ? rect.width / 2 : clientX - rect.left;
-    const y = clientY === undefined ? rect.height / 2 : clientY - rect.top;
-    const contentX = (scroll.scrollLeft + x) / zoom;
-    const contentY = (scroll.scrollTop + y) / zoom;
-    setZoom(clamped);
-    requestAnimationFrame(() => {
-      scroll.scrollLeft = contentX * clamped - x;
-      scroll.scrollTop = contentY * clamped - y;
+    try {
+      const saved = window.localStorage.getItem(layoutKey);
+      const parsed = saved ? JSON.parse(saved) : {};
+      const timer = window.setTimeout(() => setOverrides(parsed && typeof parsed === "object" ? parsed : {}), 0);
+      return () => window.clearTimeout(timer);
+    } catch { return undefined; }
+  }, [layoutKey]);
+  graphPeople.forEach((person) => {
+    const moved = overrides[person.id];
+    if (moved && positions.has(person.name)) positions.set(person.name, moved);
+  });
+  const cameraRef = useRef({ x: 0, y: 0, k: 1 });
+  const frameRef = useRef(0);
+  const applyCamera = () => {
+    cancelAnimationFrame(frameRef.current);
+    frameRef.current = requestAnimationFrame(() => {
+      const { x, y, k } = cameraRef.current;
+      const viewport = graphScrollRef.current;
+      const world = viewport?.querySelector<HTMLDivElement>(".people-graph-world");
+      if (world) world.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${k})`;
+      if (viewport) {
+        viewport.style.setProperty("--art-size", `${Math.round(2600 * k)}px`);
+        viewport.style.setProperty("--art-x", `${Math.round(x * 0.35)}px`);
+        viewport.style.setProperty("--art-y", `${Math.round(y * 0.35)}px`);
+      }
+      setZoom((current) => Math.abs(current - k) > 0.004 ? k : current);
     });
   };
-
-  const handleGraphWheel = (event: WheelEvent<HTMLDivElement>) => {
-    const mouseWheel = event.deltaMode !== 0 || (Math.abs(event.deltaY) >= 50 && Math.abs(event.deltaX) < 2);
-    if (event.ctrlKey || event.metaKey || mouseWheel) {
+  const zoomAt = (next: number, clientX?: number, clientY?: number) => {
+    const viewport = graphScrollRef.current;
+    if (!viewport) return;
+    const camera = cameraRef.current;
+    const k = Math.max(0.3, Math.min(2.4, next));
+    const rect = viewport.getBoundingClientRect();
+    const px = clientX === undefined ? rect.width / 2 : clientX - rect.left;
+    const py = clientY === undefined ? rect.height / 2 : clientY - rect.top;
+    camera.x = px - ((px - camera.x) / camera.k) * k;
+    camera.y = py - ((py - camera.y) / camera.k) * k;
+    camera.k = k;
+    applyCamera();
+  };
+  const fitView = (animate = true) => {
+    const viewport = graphScrollRef.current;
+    if (!viewport) return;
+    const points = [...positions.values()];
+    if (!points.length) return;
+    const minX = Math.min(...points.map((point) => point.x)) - 110, maxX = Math.max(...points.map((point) => point.x)) + 110;
+    const minY = Math.min(...points.map((point) => point.y)) - 90, maxY = Math.max(...points.map((point) => point.y)) + 90;
+    const rect = viewport.getBoundingClientRect();
+    const k = Math.max(0.3, Math.min(1.2, rect.width / (maxX - minX), rect.height / (maxY - minY)));
+    const world = viewport.querySelector<HTMLDivElement>(".people-graph-world");
+    if (world) world.classList.toggle("is-gliding", animate && !reduceMotion);
+    cameraRef.current = { k, x: rect.width / 2 - ((minX + maxX) / 2) * k, y: rect.height / 2 - ((minY + maxY) / 2) * k };
+    applyCamera();
+    if (world) window.setTimeout(() => world.classList.remove("is-gliding"), 420);
+  };
+  useEffect(() => {
+    if (view !== "graph") return;
+    const timer = window.setTimeout(() => fitView(false), 30);
+    return () => window.clearTimeout(timer);
+    // Fit once when the graph opens; later layout changes keep the player's camera.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+  useEffect(() => {
+    const viewport = graphScrollRef.current;
+    if (view !== "graph" || !viewport) return;
+    const onWheel = (event: globalThis.WheelEvent) => {
       event.preventDefault();
-      const amount = event.ctrlKey || event.metaKey
-        ? Math.max(-0.18, Math.min(0.18, event.deltaY * 0.004))
-        : Math.sign(event.deltaY) * 0.14;
-      zoomAt(zoom * Math.exp(-amount), event.clientX, event.clientY);
-    }
-    // Two-finger trackpad scrolling retains native horizontal and vertical panning.
-  };
+      const camera = cameraRef.current;
+      const pixelDelta = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
+      const mouseWheel = event.deltaMode !== 0 || (Math.abs(event.deltaY) >= 40 && event.deltaX === 0 && Number.isInteger(event.deltaY));
+      if (event.ctrlKey || event.metaKey) {
+        zoomAt(camera.k * Math.exp(-event.deltaY * pixelDelta * 0.0105), event.clientX, event.clientY);
+      } else if (mouseWheel) {
+        zoomAt(camera.k * Math.exp(-Math.sign(event.deltaY) * 0.16), event.clientX, event.clientY);
+      } else {
+        camera.x -= event.deltaX * pixelDelta;
+        camera.y -= event.deltaY * pixelDelta;
+        applyCamera();
+      }
+    };
+    // Safari trackpad pinch arrives as gesture events rather than ctrl+wheel.
+    let gestureStart = 1;
+    const onGestureStart = (event: Event) => { event.preventDefault(); gestureStart = cameraRef.current.k; };
+    const onGestureChange = (event: Event) => {
+      event.preventDefault();
+      const gesture = event as Event & { scale: number; clientX: number; clientY: number };
+      zoomAt(gestureStart * gesture.scale, gesture.clientX, gesture.clientY);
+    };
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    viewport.addEventListener("gesturestart", onGestureStart);
+    viewport.addEventListener("gesturechange", onGestureChange);
+    return () => {
+      viewport.removeEventListener("wheel", onWheel);
+      viewport.removeEventListener("gesturestart", onGestureStart);
+      viewport.removeEventListener("gesturechange", onGestureChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
 
+  const dragRef = useRef<{ pointerId: number; x: number; y: number; nodeId?: string; startX: number; startY: number; moved: boolean } | null>(null);
+  const suppressClickRef = useRef(false);
   const startPan = (event: PointerEvent<HTMLDivElement>) => {
-    const scroll = graphScrollRef.current;
-    if (!scroll || event.pointerType === "touch" || (event.button !== 0 && event.button !== 1)) return;
-    if (event.button === 0 && (event.target as Element).closest("button, input, select, a")) return;
-    panRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: scroll.scrollLeft, top: scroll.scrollTop };
-    scroll.setPointerCapture(event.pointerId);
-    scroll.classList.add("is-panning");
+    if (event.button !== 0 && event.button !== 1) return;
+    const node = (event.target as Element).closest<HTMLElement>("[data-node-id]");
+    if (!node && (event.target as Element).closest("button, input, select, a, path.edge-hit")) return;
+    const nodeId = node?.dataset.nodeId;
+    const person = nodeId ? graphPeople.find((row) => row.id === nodeId) : undefined;
+    const origin = person ? positions.get(person.name) : undefined;
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, nodeId,
+      startX: origin?.x ?? cameraRef.current.x, startY: origin?.y ?? cameraRef.current.y, moved: false };
+    graphScrollRef.current?.setPointerCapture(event.pointerId);
   };
-
   const movePan = (event: PointerEvent<HTMLDivElement>) => {
-    const pan = panRef.current;
-    const scroll = graphScrollRef.current;
-    if (!pan || !scroll || pan.pointerId !== event.pointerId) return;
-    scroll.scrollLeft = pan.left - (event.clientX - pan.x);
-    scroll.scrollTop = pan.top - (event.clientY - pan.y);
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true;
+    graphScrollRef.current?.classList.add(drag.nodeId ? "is-dragging-node" : "is-panning");
+    if (drag.nodeId) {
+      const k = cameraRef.current.k;
+      const nodeId = drag.nodeId;
+      setOverrides((current) => ({ ...current, [nodeId]: { x: drag.startX + dx / k, y: drag.startY + dy / k } }));
+    } else {
+      cameraRef.current.x = drag.startX + dx;
+      cameraRef.current.y = drag.startY + dy;
+      applyCamera();
+    }
   };
-
   const stopPan = (event: PointerEvent<HTMLDivElement>) => {
-    const scroll = graphScrollRef.current;
-    if (!scroll || panRef.current?.pointerId !== event.pointerId) return;
-    panRef.current = null;
-    scroll.classList.remove("is-panning");
-    if (scroll.hasPointerCapture(event.pointerId)) scroll.releasePointerCapture(event.pointerId);
+    const drag = dragRef.current;
+    const viewport = graphScrollRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    viewport?.classList.remove("is-panning", "is-dragging-node");
+    if (viewport?.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+    if (drag.moved) {
+      suppressClickRef.current = true;
+      window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+      if (drag.nodeId) setOverrides((current) => {
+        try { window.localStorage.setItem(layoutKey, JSON.stringify(current)); } catch { /* layout is a convenience */ }
+        return current;
+      });
+    }
+  };
+  const resetLayout = () => {
+    setOverrides({});
+    try { window.localStorage.removeItem(layoutKey); } catch { /* ignore */ }
+    window.setTimeout(() => fitView(), 30);
   };
 
   const detail = selected && <section className="person-detail" aria-live="polite">
     <div className="person-detail-head"><div className="person-identity">
-      <div className="person-portrait" aria-label={avatarUrl ? `Portrait of ${selected.name}` : `No portrait for ${selected.name}`}>
-        {avatarUrl ? <Image src={avatarUrl} alt="" width={68} height={68} unoptimized /> : <span aria-hidden="true">{selected.name.charAt(0).toLocaleUpperCase()}</span>}
-      </div><div><p className="person-detail-role">{selected.role || "Role unknown"}</p><h3>{selected.name}</h3>
+      {avatarUrl ? <PortraitButton className={`person-portrait${selected.attributes?.portrait_framing === "full_body" ? " is-full-body" : ""}`} src={avatarUrl} name={selected.name} caption={selected.role}>
+        <Image src={avatarUrl} alt="" width={68} height={68} unoptimized /></PortraitButton>
+        : <div className="person-portrait" aria-label={`No portrait for ${selected.name}`}><span aria-hidden="true">{selected.name.charAt(0).toLocaleUpperCase()}</span></div>}<div><p className="person-detail-role">{selected.role || "Role unknown"}</p><h3>{selected.name}</h3>
         {selected.name !== campaign.protagonist_name && <span className={`importance-badge importance-badge--${importanceOf(selected).toLowerCase()}`}>{IMPORTANCE_LABEL[importanceOf(selected)]}</span>}</div></div>
       {selected.status && selected.status !== "alive" && <span className="person-status">{selected.status}</span>}</div>
     <div className="portrait-controls">
@@ -568,15 +663,16 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
               </select>
               {backgroundCount > 0 && <label className="background-toggle"><input type="checkbox" checked={showBackground} onChange={(event) => setShowBackground(event.target.checked)} />Background ({backgroundCount})</label>}
               <span className="people-graph-spacer" />
-              <button type="button" aria-label="Zoom out" disabled={zoom <= 0.45} onClick={() => zoomAt(zoom - 0.15)}>−</button>
+              <button type="button" aria-label="Zoom out" disabled={zoom <= 0.3} onClick={() => zoomAt(cameraRef.current.k / 1.2)}>−</button>
               <span aria-live="polite">{Math.round(zoom * 100)}%</span>
-              <button type="button" aria-label="Zoom in" disabled={zoom >= 1.8} onClick={() => zoomAt(zoom + 0.15)}>+</button>
-              <button type="button" onClick={() => { const scroll = graphScrollRef.current; if (scroll) zoomAt(Math.max(0.45, Math.min(1, scroll.clientWidth / graphWidth, scroll.clientHeight / graphHeight))); }}>Fit</button>
-              <button type="button" onClick={() => zoomAt(1)}>Reset</button>
+              <button type="button" aria-label="Zoom in" disabled={zoom >= 2.4} onClick={() => zoomAt(cameraRef.current.k * 1.2)}>+</button>
+              <button type="button" onClick={() => fitView()}>Fit</button>
+              {Object.keys(overrides).length > 0 && <button type="button" onClick={resetLayout}>Reset layout</button>}
             </div>
-            <div className="people-graph-scroll" ref={graphScrollRef} onWheel={handleGraphWheel} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={stopPan} onPointerCancel={stopPan}><div className="people-graph-stage" style={{ width: graphWidth * zoom, height: graphHeight * zoom }}><div className="people-graph-scale" style={{ width: graphWidth, height: graphHeight, transform: `scale(${zoom})` }}>
+            <div className="people-graph-viewport" ref={graphScrollRef} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={stopPan} onPointerCancel={stopPan}
+              onClickCapture={(event) => { if (suppressClickRef.current) { event.stopPropagation(); event.preventDefault(); } }}>
+              <div className="people-graph-world" style={{ width: graphWidth, height: graphHeight }}>
               <div className="people-graph" role="group" aria-label={`Character relationship graph with ${graphPeople.length} people and ${relationships.length} connections`} style={{ width: graphWidth, height: graphHeight }}>
-                <div className="people-map-art" aria-hidden="true"><AtlasArtwork compact /></div>
                 <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} aria-hidden="true">
                   <defs><marker id="edge-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor" /></marker></defs>
                   {relationships.map((relation, edgeIndex) => {
@@ -609,19 +705,19 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
                   const position = positions.get(person.name);
                   if (!position) return null;
                   const dimmed = focused && !connectedNames.has(person.name) && person.name !== campaign.protagonist_name;
-                  return <motion.button type="button" key={person.id} className={`people-node${dimmed ? " is-dim" : ""}`}
+                  return <motion.button type="button" key={person.id} data-node-id={person.id} className={`people-node${dimmed ? " is-dim" : ""}${overrides[person.id] ? " is-placed" : ""}`}
                     data-player={person.name === campaign.protagonist_name} data-importance={importanceOf(person).toLowerCase()} aria-pressed={selected?.id === person.id}
                     style={{ left: position.x, top: position.y, x: "-50%", y: "-50%" }} onClick={() => choosePerson(person.id)}
                     initial={reduceMotion ? false : { opacity: 0, scale: 0.8 }} animate={{ opacity: dimmed ? 0.42 : 1, scale: 1 }}
                     whileHover={reduceMotion ? undefined : { scale: 1.04 }}
                     transition={{ type: "spring", stiffness: 320, damping: 26, delay: reduceMotion ? 0 : Math.min(nodeIndex * 0.025, 0.5) }}>
-                    <span className="people-node-portrait" aria-hidden="true">{portraitUrl(person.attributes?.avatar_url) ? <Image src={portraitUrl(person.attributes?.avatar_url)} alt="" width={46} height={46} unoptimized /> : person.name.charAt(0).toLocaleUpperCase()}</span>
+                    <span className={`people-node-portrait${person.attributes?.portrait_framing === "full_body" ? " is-full-body" : ""}`} aria-hidden="true">{portraitUrl(person.attributes?.avatar_url) ? <Image src={portraitUrl(person.attributes?.avatar_url)} alt="" width={46} height={46} unoptimized /> : person.name.charAt(0).toLocaleUpperCase()}</span>
                     <strong>{person.name}</strong><span>{person.role || (person.name === campaign.protagonist_name ? "Player character" : "Role unknown")}</span>
                   </motion.button>;
                 })}
               </div>
-            </div></div></div>
-            <p className="people-graph-note">{graphPeople.length} people · {relationships.length} connections{!showBackground && backgroundCount ? ` · ${backgroundCount} background hidden` : ""}. Arrows point from who feels to whom. Click a line for its history.</p>
+            </div></div>
+            <p className="people-graph-note">{graphPeople.length} people · {relationships.length} connections{!showBackground && backgroundCount ? ` · ${backgroundCount} background hidden` : ""}. Drag people to arrange them · pinch or ⌘-scroll to zoom · two-finger scroll to move · click a line for its history.</p>
           </main>
           <aside className="people-inspector" aria-label="Selected person details">
             <AnimatePresence mode="wait" initial={false}>

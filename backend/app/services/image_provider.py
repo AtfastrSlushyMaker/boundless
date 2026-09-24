@@ -54,6 +54,10 @@ def importance_for(character) -> str:
     return "MINOR"
 
 
+EXPLICIT_WORDS = re.compile(r"\b(?:nude|naked|topless|bottomless|nsfw|explicit|sexual|sexy|lingerie|undress\w*|bare (?:breasts?|chest|body)|"
+                            r"breasts?|nipples?|genitals?|erotic|seductive|provocative)\b", re.IGNORECASE)
+
+
 def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple[str, str]:
     from app.services.visual_identity import confirmed_adult, looks_minor
 
@@ -73,12 +77,16 @@ def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple
     state = str(visual.get("current_state") or "")
     if re.search(r"\b(?:wound|blood|bruis|torn|wet|soaked|dirt|mud|bandage|scar|burn|ash|tired|pale|sweat)", state, re.IGNORECASE):
         parts.append(state[:160])
-    detailed = sum(1 for key in ("build", "face", "eyes", "hair", "clothing") if visual.get(key)) >= 3
-    if isinstance(appearance, dict) and not detailed:
-        parts.extend(str(value)[:150] for value in appearance.values() if isinstance(value, str))
-    elif isinstance(appearance, str) and not detailed:
-        parts.append(appearance[:400])
     minor = looks_minor(visual, character)
+    # The player's own "Appearance" text is always honored (it is what they asked for),
+    # except that sexual detail is stripped for anyone who may be under 18.
+    if isinstance(appearance, dict):
+        appearance = ", ".join(str(value) for value in appearance.values() if isinstance(value, str))
+    if isinstance(appearance, str) and appearance.strip():
+        text = appearance.strip()[:500]
+        if minor:
+            text = EXPLICIT_WORDS.sub("", text)
+        parts.append(text)
     mature = allow_mature and not minor and confirmed_adult(visual, character)
     if mature and isinstance(visual.get("body"), str) and visual["body"].strip():
         parts.append(visual["body"].strip()[:300])
@@ -94,11 +102,11 @@ def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple
         if part and not any(part.casefold() in kept.casefold() for kept in unique):
             unique = [kept for kept in unique if kept.casefold() not in part.casefold()] + [part]
     positive = ", ".join(unique)[:1100]
-    framing = "character portrait, detailed face" if mature else "upper-body character portrait, detailed face"
+    framing = "full-length full-body portrait, entire figure from head to toe, feet and shoes visible, standing pose, wide framing, detailed face"
     positive = f"{style}, {framing}, stable distinctive features, {positive}{f', {accent} accents' if accent else ''}, simple dark background, no lettering"
-    negative = "text, watermark, frame, blurry face, distorted anatomy, extra limbs, gore"
+    negative = "text, watermark, frame, blurry face, distorted anatomy, extra limbs, gore, cropped head, cropped feet, close-up, headshot, cut off legs"
     if not mature:
-        negative += ", nudity, nsfw, sexualized pose, suggestive"
+        negative += ", nudity, sexualized pose"
     if minor:
         # Hard floor for anyone who may be under 18, whatever the settings say.
         negative += ", revealing clothing, sexual content, adult body, cleavage, lingerie"

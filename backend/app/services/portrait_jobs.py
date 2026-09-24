@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import UUID
 
 import httpx
@@ -60,9 +61,11 @@ async def enqueue_portrait(session: AsyncSession, campaign: Campaign, character:
     seed = new_seed() if new_identity_seed else previous_seed if isinstance(previous_seed, int) else stable_seed(character.id)
     job = PortraitJob(campaign_id=campaign.id, branch_id=character.branch_id,
                       character_id=character.id, provider=profile.provider, status="QUEUED",
-                      metadata_json={"prompt": positive, "negative_prompt": negative, "seed": seed,
+                      metadata_json={"prompt": positive, "negative_prompt": negative, "seed": seed, "framing": "full_body",
                                      "checkpoint": profile.checkpoint, "workflow": profile.workflow,
-                                     "width": profile.width, "height": profile.height, "steps": profile.steps,
+                                     # Full-body figures need a tall canvas; SDXL is trained on 832x1216.
+                                     "width": max(profile.width, 832) if profile.height <= 1216 else profile.width,
+                                     "height": max(profile.height, 1216), "steps": profile.steps,
                                      "cfg": profile.cfg, "sampler": profile.sampler, "scheduler": profile.scheduler},
                       next_attempt_at=datetime.now(UTC))
     session.add(job)
@@ -139,8 +142,11 @@ async def process_one_portrait() -> None:
                 if job.provider == "comfyui":
                     client = ComfyUIImageProvider(profile.base_url)
                     meta = job.metadata_json
+                    sized = SimpleNamespace(**{key: getattr(profile, key) for key in (
+                        "checkpoint", "steps", "cfg", "sampler", "scheduler")},
+                        width=int(meta.get("width") or profile.width), height=int(meta.get("height") or profile.height))
                     job.remote_job_id = await client.generate(workflow_for(
-                        profile, meta["prompt"], meta["negative_prompt"], meta["seed"],
+                        sized, meta["prompt"], meta["negative_prompt"], meta["seed"],
                         f"{job.id}_{job.attempts}"))
                 else:
                     job.remote_job_id = await request_horde(job.metadata_json["prompt"])
@@ -159,6 +165,7 @@ async def process_one_portrait() -> None:
                     attributes = dict(character.attributes or {})
                     attributes["avatar_url"] = f"/api/portraits/{job.id}"
                     attributes["portrait_seed"] = job.metadata_json["seed"]
+                    attributes["portrait_framing"] = job.metadata_json.get("framing", "upper_body")
                     attributes.pop("avatar_job", None)
                     character.attributes = attributes
             await session.commit()

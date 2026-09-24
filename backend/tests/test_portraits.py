@@ -256,3 +256,12 @@ def test_mature_portraits_are_opt_in_and_never_for_minors():
     child.role = "street kid"
     positive, negative = portrait_prompt(child, campaign(), allow_mature=True)
     assert "undressed" not in positive and "nudity" in negative and "sexual content" in negative
+
+
+def test_player_appearance_text_is_used_but_never_sexualizes_minors():
+    adult = character(appearance="tall woman, bare shoulders, silver rings", visual_identity={"apparent_age": "early thirties"})
+    positive, _ = portrait_prompt(adult, campaign())
+    assert "bare shoulders, silver rings" in positive and "full-body" in positive
+    child = character(appearance="small boy, naked, muddy knees", visual_identity={"apparent_age": "about 10"})
+    positive, negative = portrait_prompt(child, campaign(), allow_mature=True)
+    assert "naked" not in positive and "muddy knees" in positive and "nudity" in negative

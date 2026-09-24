@@ -537,3 +537,49 @@ li[data-state=done] .generation-step-icon{border-color:color-mix(in srgb,var(--o
 .appearance-card dl div{grid-template-columns:62px 1fr!important}
 .appearance-marks{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .appearance-marks span{padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);font-size:10px}
+
+/* ── Portrait lightbox ── */
+.portrait-zoomable{padding:0;cursor:zoom-in;transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease}
+.portrait-zoomable:hover{transform:scale(1.05);box-shadow:0 0 0 3px color-mix(in srgb,var(--gold) 35%,transparent)}
+.portrait-zoomable:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+.portrait-lightbox{position:fixed;inset:0;z-index:200;display:grid;place-items:center;padding:28px;background:#050807ee;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);cursor:zoom-out}
+.portrait-lightbox figure{margin:0;display:grid;gap:12px;max-width:min(92vw,900px);cursor:default}
+.portrait-lightbox img{display:block;max-width:100%;max-height:calc(100dvh - 140px);width:auto;height:auto;margin:0 auto;object-fit:contain;border-radius:12px;box-shadow:0 30px 80px #000c,0 0 0 1px #ffffff14}
+.portrait-lightbox figcaption{display:flex;align-items:center;justify-content:space-between;gap:16px;color:#e9e6d8}
+.portrait-lightbox figcaption strong{display:block;font:normal 22px/1.2 Georgia,serif}
+.portrait-lightbox figcaption span{display:block;margin-top:3px;color:#a9b3a4;font-size:12px}
+.portrait-lightbox figcaption a{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid #ffffff26;border-radius:999px;color:#e9e6d8;font-size:12px;white-space:nowrap}
+.portrait-lightbox figcaption a:hover{border-color:#cdb98e;color:#cdb98e}
+.portrait-lightbox-close{position:fixed;top:18px;right:18px;display:grid;place-items:center;width:42px;height:42px;border:1px solid #ffffff26;border-radius:50%;background:#0f1612cc;color:#e9e6d8;transition:transform .25s cubic-bezier(.22,1,.36,1),background .16s ease}
+.portrait-lightbox-close:hover{transform:rotate(90deg);background:#1c2a21}
+@media(prefers-reduced-motion:reduce){.portrait-zoomable,.portrait-lightbox-close{transition:none}}
+
+/* ── Relationship graph camera ── */
+.people-graph-viewport{position:relative;min-width:0;min-height:0;overflow:hidden;touch-action:none;cursor:grab;user-select:none;
+  --art-size:2600px;--art-x:0px;--art-y:0px;background-color:#141d17}
+.people-graph-viewport::before{content:"";position:absolute;inset:0;pointer-events:none;background:url('/ashen-reach-atlas.png') calc(50% + var(--art-x)) calc(50% + var(--art-y)) / var(--art-size) auto no-repeat;
+  filter:var(--map-filter,none);opacity:.5}
+.people-graph-viewport::after{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(110% 90% at 50% 50%,transparent 45%,color-mix(in srgb,var(--deep) 85%,transparent))}
+.people-graph-viewport.is-panning{cursor:grabbing}.people-graph-viewport.is-dragging-node,.people-graph-viewport.is-dragging-node *{cursor:grabbing!important}
+.people-graph-world{position:absolute;left:0;top:0;z-index:1;transform-origin:0 0;will-change:transform}
+.people-graph-world.is-gliding{transition:transform .4s cubic-bezier(.22,1,.36,1)}
+.people-graph-world .people-graph{background:transparent;overflow:visible}
+.people-graph-world .people-node{cursor:grab;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);background:color-mix(in srgb,var(--deep) 86%,transparent)}
+.people-graph-world .people-node.is-placed{box-shadow:0 0 0 1px color-mix(in srgb,var(--gold) 20%,transparent)}
+.is-dragging-node .people-graph-world .people-edge-group path{transition:none}
+.people-graph-main{grid-template-rows:auto minmax(0,1fr) auto}
+
+/* The game is an app-shell: only its inner panes scroll. Prevents the page shifting up to show the body. */
+html:has(.game-shell),body:has(.game-shell){height:100%;overflow:hidden;overscroll-behavior:none}
+body:has(.game-shell){background:var(--deep,#0b0f0d)}
+.game-shell{position:fixed;inset:0;height:auto}
+.story-reader,.rail-content,.people-index-list,.people-inspector,.settings-fields{overscroll-behavior:contain}
+/* Full-body portraits: thumbnails zoom onto the face; the lightbox shows the whole figure. */
+.is-full-body{overflow:hidden}
+.is-full-body img{width:100%!important;height:100%!important;object-fit:cover;object-position:50% 4%;transform:scale(3.1);transform-origin:50% 9%}
+.portrait-lightbox img{max-height:calc(100dvh - 120px)}
+.visually-hidden{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+/* Layout layers clip instead of scroll, so focus, anchors, or hidden inputs can never shift the app. */
+.game-shell,.game-body,.campaign-rail,.story-workspace{overflow:clip}
+.rail-content,.person-detail{position:relative}
+.people-graph-tools button{white-space:nowrap}
