@@ -66,8 +66,7 @@ async def enqueue_portrait(session: AsyncSession, campaign: Campaign, character:
                       next_attempt_at=datetime.now(UTC))
     session.add(job)
     await session.flush()
-    character.attributes = {**(character.attributes or {}), "avatar_job": str(job.id),
-                            "portrait_seed": seed, "importance": importance_for(character)}
+    character.attributes = {**(character.attributes or {}), "avatar_job": str(job.id), "portrait_seed": seed}
     return job
 
 

@@ -68,8 +68,12 @@ class Turn(Base):
     gm_response: Mapped[str] = mapped_column(Text, default="")
     suggested_actions: Mapped[list[str]] = mapped_column(JSONB, default=list)
     status: Mapped[str] = mapped_column(String(24), default="complete")
+    # Failed or interrupted attempts stay for debugging but never join the canonical story chain.
+    canonical: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
     in_world_time: Mapped[str] = mapped_column(String(120), default="")
     state_delta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    diagnostics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -120,13 +124,19 @@ class Character(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
     branch_id: Mapped[UUID] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), index=True)
+    # ``name`` is the canonical name. Titles, descriptions, and earlier names live in CharacterAlias.
     name: Mapped[str] = mapped_column(String(120))
     role: Mapped[str] = mapped_column(String(160), default="")
-    status: Mapped[str] = mapped_column(String(32), default="alive")
+    status: Mapped[str] = mapped_column(String(160), default="alive")
     personality: Mapped[str] = mapped_column(Text, default="")
     motivations: Mapped[list[str]] = mapped_column(JSONB, default=list)
     knowledge: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
     attributes: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Per-field provenance, e.g. {"role": "DIRECT_OBSERVATION"}; weaker sources cannot overwrite stronger ones.
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    importance: Mapped[str] = mapped_column(String(16), default="MINOR")
+    first_seen_turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_seen_turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -145,6 +155,83 @@ class CharacterRelationship(Base):
     visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
 
 
+class CharacterAlias(Base):
+    __tablename__ = "character_aliases"
+    __table_args__ = (UniqueConstraint("branch_id", "character_id", "normalized", name="uq_character_alias"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[UUID] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), index=True)
+    character_id: Mapped[UUID] = mapped_column(ForeignKey("characters.id", ondelete="CASCADE"), index=True)
+    alias: Mapped[str] = mapped_column(String(160))
+    normalized: Mapped[str] = mapped_column(String(160), index=True)
+    alias_type: Mapped[str] = mapped_column(String(24), default="MODEL_DISCOVERED")
+    confidence: Mapped[float] = mapped_column(Float, default=0.8)
+    first_seen_turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(40), default="state_interpreter")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CharacterFact(Base):
+    __tablename__ = "character_facts"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[UUID] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), index=True)
+    character_id: Mapped[UUID] = mapped_column(ForeignKey("characters.id", ondelete="CASCADE"), index=True)
+    fact_type: Mapped[str] = mapped_column(String(24), default="general")
+    content: Mapped[str] = mapped_column(Text)
+    normalized: Mapped[str] = mapped_column(Text, default="")
+    certainty: Mapped[str] = mapped_column(String(16), default="CONFIRMED")
+    provenance: Mapped[str] = mapped_column(String(32), default="DIRECT_OBSERVATION")
+    visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
+    first_seen_turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_confirmed_turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_turn_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    supersedes_fact_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RelationshipEvent(Base):
+    __tablename__ = "relationship_events"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[UUID] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), index=True)
+    relationship_id: Mapped[UUID] = mapped_column(ForeignKey("character_relationships.id", ondelete="CASCADE"), index=True)
+    turn_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dimension: Mapped[str] = mapped_column(String(32), default="note")
+    before_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    after_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    location: Mapped[str] = mapped_column(String(160), default="")
+    visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Ability(Base):
+    __tablename__ = "abilities"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[UUID] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), index=True)
+    character_id: Mapped[UUID] = mapped_column(ForeignKey("characters.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    normalized: Mapped[str] = mapped_column(String(160), default="")
+    aliases: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    description: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(240), default="")
+    acquired_turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="ACTIVE")
+    limitations: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    provenance: Mapped[str] = mapped_column(String(32), default="DIRECT_OBSERVATION")
+    visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Location(Base):
     __tablename__ = "locations"
 
@@ -154,6 +241,7 @@ class Location(Base):
     name: Mapped[str] = mapped_column(String(160))
     description: Mapped[str] = mapped_column(Text, default="")
     region: Mapped[str] = mapped_column(String(160), default="")
+    aliases: Mapped[list[str]] = mapped_column(JSONB, default=list)
     properties: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
 
@@ -167,7 +255,8 @@ class Item(Base):
     name: Mapped[str] = mapped_column(String(160))
     owner_name: Mapped[str] = mapped_column(String(120), default="")
     quantity: Mapped[int] = mapped_column(Integer, default=1)
-    condition: Mapped[str] = mapped_column(String(80), default="intact")
+    aliases: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    condition: Mapped[str] = mapped_column(String(240), default="intact")
     properties: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     significance: Mapped[str] = mapped_column(Text, default="")
     visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
@@ -197,6 +286,9 @@ class Memory(Base):
     source_turn_id: Mapped[UUID | None] = mapped_column(ForeignKey("turns.id", ondelete="SET NULL"))
     memory_type: Mapped[str] = mapped_column(String(40), default="EVENT")
     content: Mapped[str] = mapped_column(Text)
+    normalized_hash: Mapped[str] = mapped_column(String(64), default="", index=True)
+    turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    character_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
     importance: Mapped[float] = mapped_column(Float, default=0.4)
     confidence: Mapped[float] = mapped_column(Float, default=0.8)
     visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
@@ -206,7 +298,9 @@ class Memory(Base):
     factions: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     items: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     keywords: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(384), nullable=True)
+    # Dimension-free so the embedding provider can change; rows are compared only within one model.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(), nullable=True)
+    embedding_model: Mapped[str] = mapped_column(String(120), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -230,8 +324,18 @@ class Objective(Base):
     campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
     branch_id: Mapped[UUID] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(180))
+    # active, completed, failed, abandoned, superseded
     status: Mapped[str] = mapped_column(String(24), default="active")
     description: Mapped[str] = mapped_column(Text, default="")
+    aliases: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    criteria: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    related_character_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    related_item_names: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    related_location_names: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    created_turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completed_turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    failed_turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    resolution_note: Mapped[str] = mapped_column(Text, default="")
     visibility: Mapped[str] = mapped_column(String(24), default="PLAYER_KNOWN")
 
 
@@ -245,6 +349,11 @@ class CampaignSummary(Base):
     summary_type: Mapped[str] = mapped_column(String(32), default="campaign")
     content: Mapped[str] = mapped_column(Text, default="")
     through_turn_index: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_turn_index: Mapped[int] = mapped_column(Integer, default=0)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str] = mapped_column(String(500), default="")
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    method: Mapped[str] = mapped_column(String(24), default="model")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
@@ -259,6 +368,8 @@ class ModelProfile(Base):
     context_window: Mapped[int] = mapped_column(Integer, default=131072)
     response_length: Mapped[str] = mapped_column(String(24), default="standard")
     temperature: Mapped[float] = mapped_column(Float, default=0.82)
+    # narrator (the active story model), state, summary, canon_repair, or state_fallback.
+    role: Mapped[str] = mapped_column(String(24), default="narrator", index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -328,3 +439,22 @@ class FactionRelationship(Base):
     to_faction: Mapped[str] = mapped_column(String(160))
     relation: Mapped[str] = mapped_column(String(80), default="unknown")
     details: Mapped[str] = mapped_column(Text, default="")
+
+
+class PostTurnJob(Base):
+    """Best-effort work that runs after the canonical turn commits; failures never touch story state."""
+
+    __tablename__ = "post_turn_jobs"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    campaign_id: Mapped[UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[UUID] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), index=True)
+    turn_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="QUEUED", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    error: Mapped[str] = mapped_column(String(500), default="")
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

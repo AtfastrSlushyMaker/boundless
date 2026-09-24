@@ -8,18 +8,88 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  ArrowLeft, ArrowUpRight, Backpack, ChevronDown, CircleAlert, Clock3, GitBranch,
-  Map, Menu, MessageSquareText, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw,
-  ScrollText, Send, Settings2, Shield, StopCircle, Users, X,
+  ArrowLeft, ArrowUpRight, Backpack, CheckCircle2, ChevronDown, CircleAlert, Clock3, Flag, GitBranch,
+  Map, Menu, MessageSquareText, Moon, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw,
+  ScrollText, Send, Settings2, Shield, Sparkles, StopCircle, Sun, Sunrise, Sunset, Users, X,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AtlasArtwork } from "@/components/AtlasArtwork";
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
+import { CampaignHealth } from "@/components/CampaignHealth";
+import { ProfileList } from "@/components/LivingProfile";
 import { PeoplePanel } from "@/components/PeoplePanel";
-import { api, CampaignDetail, GameMode, StreamEvent, ThemeFamily, portraitUrl, streamTurn } from "@/lib/api";
+import { ChangeToasts, TurnChanges } from "@/components/TurnChanges";
+import { api, CampaignDetail, GameMode, Objective, PlayerProfile, SceneMood, StreamEvent, ThemeFamily, TurnChange, portraitUrl, streamTurn } from "@/lib/api";
 
 const OPENING_ACTION = "Open on the campaign's stated starting moment.";
-type LorePanel = "character" | "people" | "inventory" | "world" | "rules" | "journal";
+type LorePanel = "character" | "people" | "quests" | "inventory" | "world" | "rules" | "journal";
+type WorldClock = { day?: number; time_of_day?: string; label?: string };
+
+function worldClock(campaign: CampaignDetail): WorldClock {
+  const clock = campaign.current_state.world_clock as WorldClock | undefined;
+  return clock ?? { label: String(campaign.current_state.world_time ?? "") };
+}
+
+function ClockIcon({ period, size = 13 }: { period?: string; size?: number }) {
+  if (period === "dawn" || period === "before dawn") return <Sunrise size={size} />;
+  if (period === "evening") return <Sunset size={size} />;
+  if (period === "morning" || period === "midday" || period === "afternoon") return <Sun size={size} />;
+  if (period) return <Moon size={size} />;
+  return <Clock3 size={size} />;
+}
+
+const MOOD_LABEL: Record<string, string> = {
+  calm: "Calm", tense: "Tense", danger: "Danger", combat: "Combat", mystery: "Mystery", grief: "Grief",
+  romance: "Tender", triumph: "Triumph", eerie: "Eerie", wonder: "Wonder",
+};
+
+function sceneMood(campaign: CampaignDetail): SceneMood {
+  const mood = campaign.current_state.scene_mood as SceneMood | undefined;
+  return mood && typeof mood.mood === "string" ? mood : { mood: "calm", intensity: 0.2 };
+}
+
+function useAdaptiveMood(): [boolean, (value: boolean) => void] {
+  const [adaptive, setAdaptive] = useState(true);
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("boundless:adaptive-mood");
+      if (stored === "off") { const timer = window.setTimeout(() => setAdaptive(false), 0); return () => window.clearTimeout(timer); }
+    } catch { /* storage unavailable: keep the default */ }
+  }, []);
+  const update = (value: boolean) => {
+    setAdaptive(value);
+    try { window.localStorage.setItem("boundless:adaptive-mood", value ? "on" : "off"); } catch { /* ignore */ }
+  };
+  return [adaptive, update];
+}
+
+/** A slow, low-contrast light layer that follows the scene's mood and time of day. */
+function Ambience({ mood, period, intensity }: { mood: string; period?: string; intensity: number }) {
+  const reduceMotion = useReducedMotion();
+  return <AnimatePresence initial={false}>
+    <motion.div key={`${mood}-${period ?? ""}`} className="ambience" data-mood={mood} data-period={period || "none"} aria-hidden="true"
+      style={{ ["--mood-intensity" as string]: String(Math.max(0.25, Math.min(1, intensity))) }}
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 1.6, ease: "easeInOut" }}>
+      <span className="ambience-glow" /><span className="ambience-haze" /><span className="ambience-vignette" />
+    </motion.div>
+  </AnimatePresence>;
+}
+
+function QuestCard({ objective, index }: { objective: Objective; index: number }) {
+  const reduceMotion = useReducedMotion();
+  const done = objective.status === "completed";
+  return <motion.li layout={!reduceMotion} className={`quest-card quest-card--${objective.status}`}
+    initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+    transition={{ duration: 0.25, delay: reduceMotion ? 0 : index * 0.04 }}>
+    <span className="quest-mark" aria-hidden="true">{done ? <CheckCircle2 size={15} /> : <Flag size={14} />}</span>
+    <div>
+      <strong>{objective.title}</strong>
+      {objective.description && objective.description !== objective.title && <p>{objective.description}</p>}
+      {!!objective.aliases?.length && <p className="quest-aliases">Also: {objective.aliases.join(" · ")}</p>}
+      {objective.resolution_note && <p className="quest-note">{objective.resolution_note}</p>}
+    </div>
+  </motion.li>;
+}
 type RetryRequest = { action: string; instruction?: string; targetTurnId?: string };
 
 function Markdown({ content }: { content: string }) {
@@ -115,44 +185,84 @@ function MemoryActionMenu({ campaign, turnId, branchId, content, onChanged, onEr
   </>;
 }
 
+function profileOf(campaign: CampaignDetail): PlayerProfile | null {
+  const profile = campaign.current_state.player_profile as PlayerProfile | undefined;
+  return profile && Array.isArray(profile.traits) ? profile : null;
+}
+
 function SidebarContent({ panel, campaign, onRefreshSetup, refreshingSetup, refreshedSetup,
-                          onReindexPeople, reindexingPeople, reindexedPeople, onRefresh }: {
+                          onReindexPeople, reindexingPeople, reindexedPeople, onRefresh,
+                          onRefreshStory, refreshingStory, storyNotice }: {
   panel: LorePanel; campaign: CampaignDetail; onRefreshSetup: () => void; refreshingSetup: boolean; refreshedSetup: boolean;
+  onRefreshStory: () => void; refreshingStory: boolean; storyNotice: string;
   onReindexPeople: () => void; reindexingPeople: boolean; reindexedPeople: boolean;
   onRefresh: () => void;
 }) {
-  const [characterTab, setCharacterTab] = useState<"overview" | "traits" | "history" | "goals">("overview");
+  const [characterTab, setCharacterTab] = useState<"overview" | "traits" | "history" | "goals" | "reputation">("overview");
   const [inventorySearch, setInventorySearch] = useState("");
-  const [journalTab, setJournalTab] = useState<"events" | "memories" | "secrets">("events");
+  const [journalTab, setJournalTab] = useState<"events" | "memories" | "secrets" | "health">("events");
   if (panel === "character") {
     const constitution = campaign.constitution;
-    const abilities = [...((constitution.abilities as string[] | undefined) ?? []), ...((constitution.powers as string[] | undefined) ?? [])].filter((value, index, all) => all.indexOf(value) === index);
     const protagonist = campaign.characters.find((person) => person.name === campaign.protagonist_name);
+    const catalogue = (protagonist?.abilities ?? []).filter((ability) => ability.status === "ACTIVE");
+    const abilities = catalogue.length ? [] : [...((constitution.abilities as string[] | undefined) ?? []), ...((constitution.powers as string[] | undefined) ?? [])].filter((value, index, all) => all.indexOf(value) === index);
+    const condition = (campaign.current_state.player_condition ?? {}) as { physical_status?: string; injuries?: string[]; conditions?: string[] };
     const identity = (protagonist?.attributes ?? ((constitution.starting_state as Record<string, unknown> | undefined)?.identity as Record<string, unknown> | undefined) ?? {});
     const money = (campaign.current_state.money ?? protagonist?.attributes?.money) as { amount?: number; currency?: string } | undefined;
     const identityDetails = ([ ["Sex", identity.sex], ["Gender", identity.gender], ["Pronouns", identity.pronouns] ] as const)
       .filter(([, value]) => typeof value === "string").map(([label, value]) => `${label}: ${value}`);
     const portrait = portraitUrl(protagonist?.attributes?.avatar_url);
-    const lists = { traits: constitution.traits as string[] | undefined, history: constitution.history as string[] | undefined,
-      goals: constitution.preferences as string[] | undefined };
+    const profile = profileOf(campaign);
+    const fallback = (values: unknown) => ((values as string[] | undefined) ?? []).map((text, index) => ({ id: `${index}-${text}`, text, source: "premise", turn_index: 0, status: "active" }));
+    const lists = {
+      traits: profile?.traits ?? fallback(constitution.traits), history: profile?.history ?? fallback(constitution.history),
+      goals: profile?.goals ?? fallback(constitution.preferences), reputation: profile?.reputation ?? [],
+    };
     return <div className="lore-content character-sheet">
       <p className="lore-label">YOUR CHARACTER</p>
       <div className="character-sheet-head"><div className="character-sheet-portrait">{portrait ? <Image src={portrait} alt="" width={72} height={72} unoptimized /> : <span>{campaign.protagonist_name.charAt(0)}</span>}</div><div><h2 className="lore-name">{campaign.protagonist_name}</h2><p>{protagonist?.role || "Player character"}</p></div></div>
-      <nav className="sheet-tabs" aria-label="Character details">{(["overview", "traits", "history", "goals"] as const).map((tab) => <button type="button" key={tab} aria-current={characterTab === tab ? "page" : undefined} onClick={() => setCharacterTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
+      <nav className="sheet-tabs" aria-label="Character details">{(["overview", "traits", "history", "goals", "reputation"] as const).map((tab) => <button type="button" key={tab} aria-current={characterTab === tab ? "page" : undefined} onClick={() => setCharacterTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
       {characterTab === "overview" && <>
         <dl className="character-facts">{identityDetails.map((entry) => { const [label, value] = entry.split(": "); return <div key={label}><dt>{label}</dt><dd>{value}</dd></div>; })}
           {money && typeof money.amount === "number" && <div><dt>Money</dt><dd>{money.amount.toLocaleString()} {money.currency ?? ""}</dd></div>}
-          <div><dt>Status</dt><dd>{String(campaign.current_state.player_status ?? "alive")}</dd></div></dl>
+          <div><dt>Status</dt><dd>{String(condition.physical_status ?? campaign.current_state.player_status ?? "alive")}</dd></div></dl>
+        {!!(condition.injuries?.length || condition.conditions?.length) && <div className="condition-chips" aria-label="Injuries and conditions">
+          {condition.injuries?.map((entry) => <span key={entry} className="condition-chip condition-chip--injury">{entry}</span>)}
+          {condition.conditions?.map((entry) => <span key={entry} className="condition-chip">{entry}</span>)}</div>}
+        {!!catalogue.length && <section className="lore-group"><h3>Ability catalogue</h3><ul className="ability-cards">{catalogue.map((ability, index) =>
+          <motion.li key={ability.id} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: index * 0.05 }}>
+            <div className="ability-card-head"><Sparkles size={13} /><strong>{ability.name}</strong>
+              <span>{ability.acquired_turn_index ? `Turn ${ability.acquired_turn_index}` : ability.source || "Innate"}</span></div>
+            {ability.description && <p>{ability.description}</p>}
+            {ability.source && ability.acquired_turn_index ? <p className="ability-source">{ability.source}</p> : null}
+            {!!ability.limitations?.length && <p className="ability-limits">Limits: {ability.limitations.join("; ")}</p>}
+          </motion.li>)}</ul></section>}
         {protagonist?.personality && <section className="lore-group"><h3>Personality</h3><p className="lore-copy">{protagonist.personality}</p></section>}
         {!!abilities.length && <section className="lore-group"><h3>Established abilities</h3><ul className="plain-list">{abilities.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
         {!!(constitution.limitations as string[] | undefined)?.length && <section className="lore-group"><h3>Limitations</h3><ul className="plain-list">{(constitution.limitations as string[]).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
       </>}
-      {characterTab !== "overview" && <section className="lore-group"><h3>{characterTab[0].toUpperCase() + characterTab.slice(1)}</h3>{lists[characterTab]?.length ? <ul className="plain-list">{lists[characterTab].map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p className="lore-copy">Nothing recorded yet.</p>}</section>}
-      <button type="button" className="text-button" onClick={onRefreshSetup} disabled={refreshingSetup}>{refreshingSetup ? "Reading premise…" : refreshedSetup ? "Details refreshed · run again" : "Refresh details from premise"}</button>
+      {characterTab !== "overview" && <section className="lore-group"><h3>{characterTab[0].toUpperCase() + characterTab.slice(1)}</h3>
+        <ProfileList entries={lists[characterTab]} empty={characterTab === "reputation" ? "The world has not formed an opinion yet." : "Nothing recorded yet."} /></section>}
+      <div className="profile-actions">
+        <button type="button" className="health-button" onClick={onRefreshStory} disabled={refreshingStory}>
+          <Sparkles size={14} className={refreshingStory ? "spin" : undefined} />{refreshingStory ? "Reading the story…" : "Refresh from story"}</button>
+        <button type="button" className="text-button" onClick={onRefreshSetup} disabled={refreshingSetup}>{refreshingSetup ? "Reading premise…" : refreshedSetup ? "Premise re-read" : "Re-read premise"}</button>
+      </div>
+      {storyNotice && <p className="profile-notice" role="status">{storyNotice}</p>}
+      {profile?.updated_through_turn ? <p className="summary-meta">Profile follows the story through turn {profile.updated_through_turn}.</p> : null}
     </div>;
   }
   if (panel === "people") return <PeoplePanel campaign={campaign} onReindex={onReindexPeople}
     rebuilding={reindexingPeople} rebuilt={reindexedPeople} onRefresh={onRefresh} />;
+  if (panel === "quests") {
+    const active = campaign.objectives.filter((objective) => objective.status === "active");
+    const resolved = campaign.objectives.filter((objective) => ["completed", "failed", "abandoned"].includes(objective.status));
+    return <div className="lore-content quests-sheet"><p className="lore-label">WHAT YOU ARE AFTER</p><h2 className="lore-name">Objectives</h2>
+      {!active.length && !resolved.length && <p className="lore-copy">Objectives appear as the story gives you reasons to act.</p>}
+      {!!active.length && <section className="lore-group"><h3>Open</h3><ul className="quest-list">{active.map((objective, index) => <QuestCard key={objective.id} objective={objective} index={index} />)}</ul></section>}
+      {!!resolved.length && <section className="lore-group"><h3>Resolved</h3><ul className="quest-list">{resolved.map((objective, index) => <QuestCard key={objective.id} objective={objective} index={index} />)}</ul></section>}
+    </div>;
+  }
   if (panel === "inventory") {
     const items = campaign.inventory.filter((item) => `${item.name} ${item.significance} ${item.condition}`.toLowerCase().includes(inventorySearch.toLowerCase()));
     return <div className="lore-content inventory-sheet"><p className="lore-label">ON YOUR PERSON</p><h2 className="lore-name">Inventory</h2>
@@ -168,17 +278,26 @@ function SidebarContent({ panel, campaign, onRefreshSetup, refreshingSetup, refr
     <ul className="world-place-list">{campaign.locations.map((place) => <li key={place.id}><strong>{place.name}</strong>{place.region && <span>{place.region}</span>}{place.description && <p>{place.description}</p>}</li>)}</ul>
     {!campaign.locations.length && <p className="lore-copy">Places will appear as you discover them.</p>}
   </div>;
-  if (panel === "rules") return <div className="lore-content"><p className="lore-label">WORLD CONSTITUTION</p><h2 className="lore-name">Rules that hold</h2>
-    <p className="lore-copy">These come from your original premise and explicit canon changes.</p>
-    <ul className="rule-list">{campaign.canon_rules.map((rule, index) => <li key={rule.id ?? index}><Shield size={15} /><span>{rule.statement}</span></li>)}</ul>
+  if (panel === "rules") {
+    const learned = profileOf(campaign)?.world_rules ?? [];
+    const setupRules = ((campaign.constitution.rules as Array<{ statement: string; type: string; strength: string }> | undefined) ?? [])
+      .filter((rule) => rule.type !== "GOAL");
+    return <div className="lore-content"><p className="lore-label">WORLD CONSTITUTION</p><h2 className="lore-name">Rules that hold</h2>
+    <p className="lore-copy">Hard rules come from your premise and explicit canon commands. The world also teaches you how it works as you play.</p>
+    <ul className="rule-list">{campaign.canon_rules.map((rule, index) => <li key={rule.id ?? index}><Shield size={15} /><span>{rule.statement}</span></li>)}
+      {setupRules.map((rule) => <li key={`${rule.type}-${rule.statement}`} className={`rule-${rule.strength.toLowerCase()}`}><Shield size={15} /><span>{rule.statement}<em>{rule.strength === "HARD" ? "Hard" : "Soft"} · {rule.type.replaceAll("_", " ").toLowerCase()}</em></span></li>)}</ul>
+    <section className="lore-group"><h3>Learned in the story</h3><ProfileList entries={learned} empty="Rules you discover in play will appear here." /></section>
     <details className="prompt-record"><summary>Original premise</summary><p>{campaign.original_prompt}</p></details>
   </div>;
+  }
   return <div className="lore-content journal-sheet"><p className="lore-label">CAMPAIGN RECORD</p><h2 className="lore-name">Journal</h2>
-    {campaign.summary && <section className="summary-note"><h3>What has happened</h3><p>{campaign.summary}</p></section>}
-    <nav className="sheet-tabs" aria-label="Journal entries">{(["events", "memories", "secrets"] as const).map((tab) => <button type="button" key={tab} aria-current={journalTab === tab ? "page" : undefined} onClick={() => setJournalTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
+    {campaign.summary && <section className="summary-note"><h3>What has happened</h3><p>{campaign.summary}</p>
+      {campaign.summary_state && <p className="summary-meta">Through turn {campaign.summary_state.through_turn_index}{campaign.summary_state.method === "deterministic" ? " · compiled from the record" : ""}{campaign.summary_state.last_error ? " · model retry pending" : ""}</p>}</section>}
+    <nav className="sheet-tabs" aria-label="Journal entries">{(["events", "memories", "secrets", "health"] as const).map((tab) => <button type="button" key={tab} aria-current={journalTab === tab ? "page" : undefined} onClick={() => setJournalTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
     {campaign.events.length === 0 && campaign.memories.length === 0 && !campaign.summary && <p className="lore-copy">Important events will gather here as the story unfolds.</p>}
     {journalTab === "events" && <ul className="journal-list">{campaign.events.map((event, index) => <li key={event.id ?? index}><span>{event.certainty ?? "RECORDED"}</span><p>{event.content}</p></li>)}</ul>}
     {journalTab === "memories" && <ul className="journal-list">{campaign.memories.map((memory, index) => <li key={String(memory.id ?? index)}><span>{String(memory.memory_type ?? "MEMORY")}</span><p>{String(memory.content ?? "")}</p></li>)}</ul>}
+    {journalTab === "health" && <CampaignHealth campaign={campaign} onRepaired={() => onRefresh()} />}
     {journalTab === "secrets" && <ul className="journal-list">{campaign.known_secrets.map((secret) => <li key={secret.id}><span>{secret.name}</span><p>{secret.content}</p></li>)}</ul>}
   </div>;
 }
@@ -199,6 +318,10 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
   const [isFollowing, setIsFollowing] = useState(true);
   const [showJump, setShowJump] = useState(false);
   const [notice, setNotice] = useState("");
+  const [stage, setStage] = useState<"" | "writing" | "interpreting">("");
+  const [latestChanges, setLatestChanges] = useState<{ key: string; changes: TurnChange[] } | null>(null);
+  const [freshTurnId, setFreshTurnId] = useState<string | null>(null);
+  const [adaptiveMood, setAdaptiveMood] = useAdaptiveMood();
   const abortRef = useRef<AbortController | null>(null);
   const readerRef = useRef<HTMLDivElement>(null);
   const startedOpening = useRef(false);
@@ -249,6 +372,19 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
     },
     onError: (error) => setNotice(error.message),
   });
+  const [storyNotice, setStoryNotice] = useState("");
+  const refreshStory = useMutation({
+    mutationFn: () => {
+      if (!branchId) throw new Error("Open a campaign before refreshing it.");
+      return api.refreshStory(campaignId, branchId);
+    },
+    onSuccess: (result) => {
+      cache.setQueryData(["campaign", campaignId, requestedBranchId], result.campaign);
+      setStoryNotice(result.changes.length ? `${result.changes.length} changes from the story.` : "Everything is already up to date.");
+      if (result.changes.length) setLatestChanges({ key: `profile-${Date.now()}`, changes: result.changes.map((change) => ({ ...change, type: "character" })) });
+    },
+    onError: (error) => setStoryNotice(error.message),
+  });
   const reindexPeople = useMutation({
     mutationFn: () => {
       if (!branchId) throw new Error("Open a campaign before recovering people.");
@@ -274,11 +410,14 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
     setGenerating(true); setStreamError(""); setNotice(""); setLiveText(""); setRetryRequest(null);
     try {
       const onEvent = (event: StreamEvent) => {
-        if (event.type === "delta") setLiveText((current) => current + event.text);
+        if (event.type === "delta") { setStage("writing"); setLiveText((current) => current + event.text); }
+        if (event.type === "status" && event.stage === "interpreting") setStage("interpreting");
         if (event.type === "replace") setLiveText(event.text);
-        if (event.type === "error") { setStreamError(event.message); setRetryRequest(currentRequest); setGenerating(false); setLiveText(""); }
+        if (event.type === "error") { setStreamError(event.message); setRetryRequest(currentRequest); setGenerating(false); setLiveText(""); setStage(""); }
         if (event.type === "complete") {
-          setGenerating(false); setLiveText(""); setRetryRequest(null); setAwaitingStoryRefresh(true);
+          setFreshTurnId(event.turn_id);
+          setLatestChanges({ key: event.turn_id, changes: event.changes ?? [] });
+          setGenerating(false); setLiveText(""); setStage(""); setRetryRequest(null); setAwaitingStoryRefresh(true);
           void refetchCampaign().finally(() => setAwaitingStoryRefresh(false));
         }
       };
@@ -307,7 +446,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
         setRetryRequest(currentRequest);
       }
     } finally {
-      setGenerating(false); abortRef.current = null;
+      setGenerating(false); setStage(""); abortRef.current = null;
     }
   }, [branchId, campaignId, generating, changeGameMode.isPending, changeTheme.isPending, refetchCampaign]);
 
@@ -373,7 +512,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
   };
 
   const nav = useMemo(() => [
-    ["character", "Character", Users], ["people", "People", MessageSquareText],
+    ["character", "Character", Users], ["people", "People", MessageSquareText], ["quests", "Objectives", Flag],
     ["inventory", "Inventory", Backpack], ["world", "World", Map], ["rules", "World rules", Shield], ["journal", "Journal", ScrollText],
   ] as const, []);
 
@@ -381,7 +520,8 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
   if (campaignQuery.isError || !campaign) return <main className="game-load-error"><Link href="/" className="back-link"><ArrowLeft size={16} />Back to Boundless</Link><CircleAlert size={25} /><h1>This world could not be opened.</h1><p>{campaignQuery.error?.message ?? "Campaign not found."}</p><button className="quiet-button" onClick={() => void campaignQuery.refetch()}>Try again</button></main>;
 
   return (
-    <main className={`game-shell theme-${campaign.theme?.family ?? "neutral"}`}>
+    <main className={`game-shell theme-${campaign.theme?.family ?? "neutral"}${adaptiveMood ? " is-adaptive" : ""}`}
+      data-mood={adaptiveMood ? sceneMood(campaign).mood : "none"} data-period={worldClock(campaign).time_of_day || "none"}>
       <header className="topbar game-topbar">
         <div className="game-brand-group">
           <button className="icon-button side-toggle desktop-only" onClick={() => setSidebarOpen(!sidebarOpen)} aria-label={sidebarOpen ? "Collapse campaign notes" : "Expand campaign notes"}>{sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</button>
@@ -393,6 +533,11 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
           <span className="campaign-subtitle">{campaign.genre} <span>·</span> {campaign.protagonist_name}</span>
         </div>
         <div className="game-top-actions">
+          {adaptiveMood && <motion.button type="button" key={sceneMood(campaign).mood} className="mood-chip" title="The scene's current mood · click to turn adaptive mood off"
+            onClick={() => setAdaptiveMood(false)} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}>
+            <span className="mood-dot" aria-hidden="true" /><span>{MOOD_LABEL[sceneMood(campaign).mood] ?? sceneMood(campaign).mood}</span></motion.button>}
+          {worldClock(campaign).label && <motion.span key={worldClock(campaign).label} className="world-clock-chip" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}>
+            <ClockIcon period={worldClock(campaign).time_of_day} /><span>{worldClock(campaign).label}</span></motion.span>}
           <div className="branch-control">
             <GitBranch size={15} />
             <select aria-label="Choose timeline" value={campaign.branch.id} onChange={(event) => void selectBranch(event.target.value)}>
@@ -416,14 +561,17 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
           <nav className="lore-nav" aria-label="Campaign information">
             {nav.map(([id, label, Icon]) => <button key={id} className={panel === id ? "lore-nav-item lore-nav-item--active" : "lore-nav-item"} onClick={() => { setPanel(id); setMobileNavOpen(false); }} aria-current={panel === id ? "page" : undefined}><Icon size={16} /><span>{label}</span>{panel === id && <motion.span layoutId="lore-cursor" className="lore-cursor" aria-hidden="true" transition={{ type: "spring", stiffness: 380, damping: 34 }} />}</button>)}
           </nav>
-          <div className="rail-content"><SidebarContent panel={panel} campaign={campaign} onRefreshSetup={() => refreshSetup.mutate()} refreshingSetup={refreshSetup.isPending} refreshedSetup={refreshSetup.isSuccess} onReindexPeople={() => reindexPeople.mutate()} reindexingPeople={reindexPeople.isPending} reindexedPeople={reindexPeople.isSuccess} onRefresh={refetchCampaign} /></div>
-          <footer className="rail-footer"><Clock3 size={13} /><span>{String(campaign.current_state.world_time ?? "Time unmarked")}</span></footer>
+          <div className="rail-content"><SidebarContent panel={panel} campaign={campaign} onRefreshSetup={() => refreshSetup.mutate()} refreshingSetup={refreshSetup.isPending} refreshedSetup={refreshSetup.isSuccess} onReindexPeople={() => reindexPeople.mutate()} reindexingPeople={reindexPeople.isPending} reindexedPeople={reindexPeople.isSuccess} onRefresh={refetchCampaign}
+            onRefreshStory={() => refreshStory.mutate()} refreshingStory={refreshStory.isPending} storyNotice={storyNotice} /></div>
+          <footer className="rail-footer"><ClockIcon period={worldClock(campaign).time_of_day} /><span>{worldClock(campaign).label || "Time unmarked"}</span>
+            {!!campaign.objectives.filter((objective) => objective.status === "active").length && <button type="button" className="rail-quest-count" onClick={() => setPanel("quests")}><Flag size={12} />{campaign.objectives.filter((objective) => objective.status === "active").length}</button>}</footer>
         </aside>
         {mobileNavOpen && <button className="rail-scrim" aria-label="Close campaign notes" onClick={() => setMobileNavOpen(false)} />}
 
         <section className="story-workspace" aria-label="Campaign story">
+          {adaptiveMood && <Ambience mood={sceneMood(campaign).mood} period={worldClock(campaign).time_of_day} intensity={sceneMood(campaign).intensity} />}
           <div className="story-meta">
-            <div className="story-place"><span>{campaign.current_location || "THE OPENING SCENE"}</span><i aria-hidden="true">·</i><span>{String(campaign.current_state.world_time ?? "NOW")}</span></div>
+            <div className="story-place"><span>{campaign.current_location || "THE OPENING SCENE"}</span><i aria-hidden="true">·</i><span>{worldClock(campaign).label || "NOW"}</span></div>
             <div className="story-meta-right"><span>TURN {String(campaign.turns.at(-1)?.turn_index ?? 0).padStart(2, "0")}</span><span>{campaign.branch.name}</span></div>
           </div>
           <div className="story-reader" ref={readerRef} onScroll={onReaderScroll}>
@@ -437,15 +585,17 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
                   {modelReady ? <button className="text-button" onClick={() => { startedOpening.current = true; void runStream(OPENING_ACTION); }}>Open the first scene <ArrowUpRight size={15} /></button> : <button className="text-button" onClick={() => setSettingsOpen(true)}>Configure local inference <Settings2 size={15} /></button>}
                 </div>
               )}
-              {campaign.turns.map((turn, index) => <article className="story-turn" key={turn.id}>
+              {campaign.turns.map((turn, index) => <motion.article className={`story-turn${turn.id === freshTurnId ? " story-turn--fresh" : ""}`} key={turn.id}
+                initial={turn.id === freshTurnId ? { opacity: 0.4, y: 10 } : false} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}>
                 <div className="passage-head"><span>{turn.in_world_time || (index === 0 ? "THE BEGINNING" : `TURN ${String(turn.turn_index).padStart(2, "0")}`)}</span><span className="passage-index">{String(turn.turn_index).padStart(2, "0")}</span></div>
                 {turn.player_action && turn.player_action !== OPENING_ACTION && <div className="player-intention"><span>{campaign.protagonist_name}</span><p>{turn.player_action}</p></div>}
                 <div className="gm-prose"><Markdown content={turn.gm_response} /></div>
+                <TurnChanges changes={turn.changes ?? []} fresh={turn.id === freshTurnId} />
                 <MemoryActionMenu campaign={campaign} turnId={turn.id} branchId={campaign.branch.id} content={turn.gm_response}
                   onChanged={(detail) => { cache.setQueryData(["campaign", campaignId, requestedBranchId], detail); void refetchCampaign(); }}
                   onError={(message) => setNotice(message)} />
                 <div className="passage-space" aria-hidden="true"><span /></div>
-              </article>)}
+              </motion.article>)}
               {campaign.game_mode === "guided" && latestChoices.length > 0 && !generating && !awaitingStoryRefresh && <section className="story-choices" aria-label="Suggested next actions">
                 <div className="story-choices-head"><h2>Possible moves</h2><p>Choose one or write your own below.</p></div>
                 <div className="story-choices-list">{latestChoices.map((choice, index) =>
@@ -457,7 +607,14 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
                 <div className="story-choices-empty"><span>No choices for this scene. You can write your own action.</span>
                   <button type="button" className="text-button" disabled={!modelReady || changeGameMode.isPending} onClick={() => changeGameMode.mutate("guided")}>Try suggestions again</button>
                 </div>}
-              {liveText && <article className="story-turn story-turn--live"><div className="passage-head"><span>THE WORLD ANSWERS</span><span className="live-mark">WRITING</span></div><div className="gm-prose"><Markdown content={liveText} /></div><span className="stream-caret" aria-hidden="true" /></article>}
+              {liveText && <motion.article className="story-turn story-turn--live" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+                <div className="passage-head"><span>THE WORLD ANSWERS</span><span className="live-mark">{stage === "interpreting" ? "RECORDING" : "WRITING"}</span></div>
+                <div className="gm-prose"><Markdown content={liveText} /></div>
+                <AnimatePresence mode="wait">{stage === "interpreting"
+                  ? <motion.div key="record" className="stage-pill" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                      <span className="stage-dots" aria-hidden="true"><i /><i /><i /></span>Updating people, places, and objectives…</motion.div>
+                  : <motion.span key="caret" className="stream-caret" aria-hidden="true" exit={{ opacity: 0 }} />}</AnimatePresence>
+              </motion.article>}
               {generating && !liveText && <div className="generation-state"><span className="generation-orbit" aria-hidden="true">B</span><p>Finding what the world does next</p><button className="text-button" onClick={() => abortRef.current?.abort()}><StopCircle size={15} />Stop</button></div>}
               {streamError && <div className="stream-error" role="alert"><CircleAlert size={16} /><p>{streamError}</p>{retryRequest && <button className="text-button" onClick={() => void runStream(retryRequest.action, retryRequest.instruction, retryRequest.targetTurnId)}>Try again</button>}</div>}
               {notice && <p className="notice-line notice-line--error" role="status">{notice}</p>}
@@ -471,6 +628,8 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
                 <select id="world-mood" value={campaign.theme?.family ?? "neutral"} onChange={(event) => changeTheme.mutate(event.target.value as ThemeFamily)} disabled={generating || changeTheme.isPending}>
                   <option value="dark_fantasy">Dark fantasy</option><option value="horror">Horror</option><option value="mystery">Mystery</option><option value="cozy">Cozy</option><option value="romance">Romance</option><option value="cyberpunk">Cyberpunk</option><option value="sci_fi">Science fiction</option><option value="survival">Survival</option><option value="modern">Modern</option><option value="neutral">Neutral</option>
                 </select>
+              </label><label className="play-mode-field adaptive-toggle" htmlFor="adaptive-mood"><span>Adaptive</span>
+                <input id="adaptive-mood" type="checkbox" checked={adaptiveMood} onChange={(event) => setAdaptiveMood(event.target.checked)} />
               </label><label className="play-mode-field" htmlFor="play-mode"><span>Play style</span>
                 <select id="play-mode" value={campaign.game_mode} onChange={(event) => changeGameMode.mutate(event.target.value as GameMode)} disabled={generating || changeGameMode.isPending}>
                   <option value="freeform">Write actions</option><option value="guided">Offer choices</option>
@@ -487,6 +646,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
           </form>
         </section>
       </div>
+      <ChangeToasts latest={latestChanges} />
       <ModelSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </main>
   );

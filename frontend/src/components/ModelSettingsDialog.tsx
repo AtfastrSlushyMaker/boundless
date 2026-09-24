@@ -6,6 +6,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import { api, ModelSettings } from "@/lib/api";
 import { ImageSettingsPanel } from "@/components/ImageSettingsPanel";
+import { ModelRolesPanel } from "@/components/ModelRolesPanel";
 
 type Props = { open: boolean; onClose: () => void };
 
@@ -60,7 +61,7 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
     setMessage("");
     onClose();
   }, [onClose]);
-  const form = draft ?? query.data ?? initial;
+  const form: ModelSettings = { ...initial, ...(draft ?? query.data ?? {}) };
   const setForm = (update: (value: ModelSettings) => ModelSettings) => setDraft(update(form));
   const mlxSupported = capabilities.data?.mlx_supported ?? false;
   const mlxDefaultEndpoint = capabilities.data?.mlx_default_base_url ?? initial.base_url;
@@ -176,7 +177,7 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
           </div>
           <button className="icon-button" aria-label="Close model settings" onClick={closeDialog}><X size={18} /></button>
         </header>
-        <nav className="settings-section-nav" aria-label="Settings section"><button type="button" aria-current={section === "model" ? "page" : undefined} onClick={() => setSection("model")}>Story model</button><button type="button" aria-current={section === "portraits" ? "page" : undefined} onClick={() => setSection("portraits")}>Portrait generation</button></nav>
+        <nav className="settings-section-nav" aria-label="Settings section"><button type="button" aria-current={section === "model" ? "page" : undefined} onClick={() => setSection("model")}>Models</button><button type="button" aria-current={section === "portraits" ? "page" : undefined} onClick={() => setSection("portraits")}>Portrait generation</button></nav>
         {section === "portraits" ? <ImageSettingsPanel /> : <>
         <div className="model-health-line">
           {query.isLoading ? <LoaderCircle className="spin" size={16} /> : connectionChanged ? <CircleX size={16} /> : query.data?.health?.status === "connected" ? <Activity size={16} /> : <CircleX size={16} />}
@@ -304,6 +305,7 @@ export function ModelSettingsDialog({ open, onClose }: Props) {
           {form.provider === "mlx" && !mlxSupported && <p className="form-message form-message--error" role="alert">MLX is supported only on Apple Silicon Macs. Choose another runtime for this device.</p>}
           <p className="form-note">{form.provider === "deepseek" ? <>DeepSeek is hosted. World prompts, enhancement requests, and campaign context are sent to its API. Your key stays in a local secret file and is never added to exports.</> : form.provider === "openai-compatible" && !isLocalModel ? <>This API endpoint is remote. Prompts, enhancements, and campaign context are sent there when you generate.</> : <>Prompts are sent to the local model endpoint shown above.</>}</p>
           {message && <p className="form-message" role="status">{message}</p>}
+          <ModelRolesPanel narratorLabel={query.data ? modelDisplayLabel(query.data.provider, query.data.model) : "Active model"} />
           </div>
           <footer className="dialog-actions">
             <button type="button" className="quiet-button" onClick={closeDialog}>Close</button>

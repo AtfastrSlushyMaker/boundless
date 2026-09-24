@@ -18,8 +18,14 @@ from app.db.models import (
     Objective,
 )
 from app.schemas import CampaignCreate
+from app.services.abilities import gain_ability
+from app.services.character_store import add_alias
 from app.services.constitution import derive_constitution, derive_theme, infer_player, infer_title
+from app.services.memory_service import add_memory
+from app.services.post_turn import enqueue
 from app.services.state_service import capture_snapshot
+from app.services.story_profile import seed_profile
+from app.services.world_time import initial_clock
 
 
 async def create_campaign(session: AsyncSession, payload: CampaignCreate) -> tuple[Campaign, Branch]:
@@ -46,32 +52,45 @@ async def create_campaign(session: AsyncSession, payload: CampaignCreate) -> tup
     session.add(campaign)
     await session.flush()
     branch = Branch(campaign_id=campaign.id, name="First thread", current_state={
-        "world_time": "Opening", "player_status": "alive", "current_location": "",
+        "world_time": "Day 1", "player_status": "alive", "current_location": "",
         "confirmed_canon_exceptions": [], "elapsed_seconds": 0,
         **({"money": constitution.starting_state["money"]} if constitution.starting_state.get("money") else {}),
     })
     session.add(branch)
     await session.flush()
+    branch.current_state = {**branch.current_state, "world_clock": initial_clock(), "world_time": "Day 1",
+                            "player_profile": seed_profile(constitution.model_dump(mode="json")),
+                            "scene_mood": {"mood": "calm", "intensity": 0.2, "time_of_day": "", "source": "setup"}}
     campaign.active_branch_id = branch.id
-    session.add(Character(campaign_id=campaign.id, branch_id=branch.id, name=constitution.player_identity,
+    player = Character(campaign_id=campaign.id, branch_id=branch.id, name=constitution.player_identity,
         role="Player character", status="alive", personality="", motivations=[], visibility="PLAYER_KNOWN",
+        importance="MAJOR", first_seen_turn_index=0,
+        provenance={key: "PLAYER_EXPLICIT" for key in constitution.starting_state.get("identity", {})},
         attributes={"abilities": constitution.abilities, "powers": constitution.powers,
                     "limitations": constitution.limitations, "origin": constitution.origin,
                     "traits": constitution.traits, "history": constitution.history,
                     **constitution.starting_state.get("identity", {}),
-                    **({"money": constitution.starting_state["money"]} if constitution.starting_state.get("money") else {})}))
+                    **({"money": constitution.starting_state["money"]} if constitution.starting_state.get("money") else {})})
+    session.add(player)
+    await session.flush()
+    await add_alias(session, player, player.name, "CANONICAL_NAME", turn_index=0, source="player_setup", confidence=1.0)
+    for entry in constitution.ability_catalogue:
+        await gain_ability(session, player, entry, provenance="PLAYER_EXPLICIT", turn_index=0, source_default="campaign_setup")
     for goal in constitution.preferences[:5]:
-        session.add(Objective(campaign_id=campaign.id, branch_id=branch.id,
-                              title=goal[:160], description=goal[:2000], status="active", visibility="PLAYER_KNOWN"))
+        session.add(Objective(campaign_id=campaign.id, branch_id=branch.id, title=goal[:160], description=goal[:2000],
+                              status="active", visibility="PLAYER_KNOWN", created_turn_index=0))
+    pending: list = []
     for fact in [*constitution.history, *constitution.important_relationships, *constitution.world_rules][:20]:
-        session.add(Memory(campaign_id=campaign.id, branch_id=branch.id,
-                           memory_type="SETUP", content=fact[:5000], importance=0.8,
-                           confidence=1.0, visibility="PLAYER_KNOWN", characters=[constitution.player_identity]))
+        await add_memory(session, campaign_id=campaign.id, branch_id=branch.id, content=fact, kind="SETUP",
+                         importance=0.8, confidence=1.0, turn_index=0, characters=[constitution.player_identity],
+                         character_ids=[str(player.id)], pending=pending)
     for invariant in constitution.hard_invariants:
         session.add(CanonRule(campaign_id=campaign.id, rule_type=invariant["type"],
             statement="The player cannot permanently die." if invariant["type"] == "PLAYER_CANNOT_DIE" else str(invariant),
             strength=invariant.get("strength", "HARD"), exceptions=invariant.get("exceptions", []),
             visibility="PLAYER_KNOWN", source="campaign_setup"))
+    await session.flush()
+    enqueue(session, campaign_id=campaign.id, branch_id=branch.id, kind="CONSTITUTION_EXTRACTION")
     session.add(Checkpoint(campaign_id=campaign.id, branch_id=branch.id, turn_index=0, state_snapshot=await capture_snapshot(session, branch)))
     if not await session.scalar(select(ModelProfile.id).where(ModelProfile.active.is_(True))):
         session.add(ModelProfile())

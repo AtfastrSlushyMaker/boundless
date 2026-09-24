@@ -52,6 +52,83 @@ def _explicit_money(text: str) -> dict[str, str | int]:
     return {"amount": int(match.group(1)), "currency": match.group(2).casefold()} if match else {}
 
 
+NOMINAL = {
+    "steal": "theft", "copy": "copying", "control": "control", "read": "reading", "heal": "healing",
+    "summon": "summoning", "teleport": "teleportation", "fly": "flight", "see": "sight", "speak": "speech",
+    "become": "transformation", "transform": "transformation", "command": "command", "absorb": "absorption",
+    "drain": "draining", "take": "taking", "sense": "sensing", "manipulate": "manipulation", "bend": "bending",
+    "create": "creation", "shape": "shaping", "mimic": "mimicry", "borrow": "borrowing", "devour": "devouring",
+}
+ABILITY_PHRASE = re.compile(
+    r"\b(?:ability|power|gift|talent|curse) to (?P<verb>[a-z]+)(?:\s+(?P<object>(?!and\b|when\b|by\b|if\b)[a-z'-]+(?:\s+(?!and\b|when\b|by\b|if\b|to\b)[a-z'-]+){0,2}))?",
+    re.IGNORECASE)
+POWER_VERB = re.compile(
+    r"\bI (?:can|am able to)\s+(?P<verb>cast|summon|control|command|transform|heal|teleport|fly|read|shapeshift|"
+    r"become|absorb|drain|steal|copy)\s+(?P<object>[a-z'-]+(?:\s+[a-z'-]+){0,2})", re.IGNORECASE)
+LIMITATION = re.compile(r"\b(?:I (?:cannot|can't|can not)|only (?:when|if|while)|my (?:power|magic|ability) (?:cannot|can't|only|fails)|"
+                        r"costs? me|takes a toll|at a price|must (?:touch|see|be))\b", re.IGNORECASE)
+
+
+def _ability_name(verb: str, obj: str) -> str:
+    verb = verb.casefold()
+    noun = NOMINAL.get(verb, f"{verb}ing" if not verb.endswith("e") else f"{verb[:-1]}ing")
+    obj = re.sub(r"\b(?:their|his|her|my|the|a|an|other|others'?)\b", " ", obj or "", flags=re.IGNORECASE)
+    obj = " ".join(obj.split())
+    return (f"{obj} {noun}" if obj else noun).strip().capitalize()[:120]
+
+
+def extract_abilities(prompt: str) -> list[dict]:
+    """Deterministic ability catalogue entries from explicit first-person setup text."""
+    sentences = _sentences(prompt)
+    found: list[dict] = []
+    for index, sentence in enumerate(sentences):
+        for pattern in (ABILITY_PHRASE, POWER_VERB):
+            for match in pattern.finditer(sentence):
+                if pattern is ABILITY_PHRASE and not re.search(r"\b(?:I|my|me)\b", sentence, re.IGNORECASE):
+                    continue
+                verb, obj = match.group("verb"), match.group("object") or ""
+                name = _ability_name(verb, obj)
+                if any(entry["name"].casefold() == name.casefold() for entry in found):
+                    continue
+                keywords = {verb.casefold(), *(word.casefold() for word in obj.split() if len(word) > 3)}
+                detail = [sentence]
+                for follow in sentences[index + 1:index + 9]:
+                    related = any(word in follow.casefold() for word in keywords) or \
+                        re.search(r"\b(?:spell|magic|power|touch)\b", follow, re.IGNORECASE)
+                    if not related and len(follow) > 45:
+                        break
+                    detail.append(follow)
+                    if len(detail) >= 8:
+                        break
+                limits = [line[:300] for line in detail if LIMITATION.search(line)]
+                source = "innate" if re.search(r"\bborn with|since birth|innate|always had\b", sentence, re.IGNORECASE) else "campaign_setup"
+                found.append({"name": name, "description": " ".join(detail)[:1200], "source": source,
+                              "limitations": limits, "strength": "HARD", "source_text": sentence[:500]})
+    return found[:12]
+
+
+def constitution_rules(constitution: CampaignConstitution) -> list[dict]:
+    """Auditable rule list: every important setup rule keeps its type, strength, and source text."""
+    rules: list[dict] = []
+    for invariant in constitution.hard_invariants:
+        rules.append({"statement": "The player cannot permanently die." if invariant.get("type") == "PLAYER_CANNOT_DIE"
+                      else str(invariant.get("statement", invariant.get("type", ""))),
+                      "type": invariant.get("type", "HARD_RULE"), "strength": invariant.get("strength", "HARD"),
+                      "source": invariant.get("source", "campaign_setup"), "exceptions": invariant.get("exceptions", [])})
+    for entry in constitution.ability_catalogue:
+        rules.append({"statement": f"{constitution.player_identity} has the ability: {entry['name']}.", "type": "ABILITY",
+                      "strength": "HARD", "source": "player_setup", "source_text": entry.get("source_text", "")})
+    for kind, values, strength in (("LIMITATION", constitution.limitations, "HARD"),
+                                   ("MORTALITY", constitution.mortality_rules, "HARD"),
+                                   ("WORLD_RULE", constitution.world_rules, "SOFT"),
+                                   ("MAGIC_RULE", constitution.magic_rules, "SOFT"),
+                                   ("GOAL", constitution.goals, "SOFT")):
+        for value in values:
+            rules.append({"statement": value, "type": kind, "strength": strength, "source": "player_setup",
+                          "source_text": value})
+    return rules
+
+
 def derive_constitution(prompt: str) -> CampaignConstitution:
     text = prompt.strip()
     lower = text.casefold()
@@ -90,12 +167,17 @@ def derive_constitution(prompt: str) -> CampaignConstitution:
     if re.search(r"(?:may|might|could) be (?:a |one |exactly one )?(?:hidden )?(?:way|method|weakness)|i believe there may be", lower):
         hidden_permissions.append("A hidden weakness or exception may exist if established before it becomes relevant.")
 
-    abilities = [sentence[:500] for sentence in sentences if _first_person(sentence) and re.search(
-        r"\b(?:I can|I'm able to|I am able to|my (?:power|ability|magic) is|I (?:command|control|summon|transform|cast))\b",
-        sentence, re.IGNORECASE)][:20]
-    powers = [sentence for sentence in abilities if re.search(r"\b(?:magic|power|spell|summon|transform|immortal|control)\b", sentence, re.IGNORECASE)]
+    catalogue = extract_abilities(text)
+    abilities = [f"{entry['name']}: {entry['description']}"[:500] for entry in catalogue]
+    abilities += [sentence[:500] for sentence in sentences if _first_person(sentence) and re.search(
+        r"\b(?:I'm able to|I am able to|my (?:power|ability|magic) is|I (?:command|control|summon|transform|cast))\b",
+        sentence, re.IGNORECASE) and not any(sentence in entry["description"] for entry in catalogue)][:8]
+    powers = [sentence for sentence in abilities if re.search(r"\b(?:magic|power|spell|summon|transform|immortal|control|theft|steal)\b", sentence, re.IGNORECASE)]
+    limitations = _collect(sentences, r"\b(?:I (?:cannot|can't|can not)|my (?:power|magic|ability) (?:cannot|can't|only|fails)|"
+                                      r"takes a (?:huge )?toll|costs? me)\b", 12)
+    magic_rules = _collect(sentences, r"\b(?:magic (?:is|works|requires|cannot|can't|comes|bleeds)|spells? (?:require|cost|cannot)|mages?\b.*\bmust)\b", 12)
     traits = _collect(sentences, r"\b(?:(?:I am|I'm)\s+(?:(?:a |an )?(?:man|woman|nonbinary|non-binary|human|demon|elf|thief|king|queen|priest|merchant|soldier|courier|mortal|immortal)|neither\b)|I just\b|people call me\b)", 12)
-    goals = _collect(sentences, r"\b(?:my goal is|I (?:want|intend|plan|aim|seek) to|I will)\b", 12)
+    goals = _collect(sentences, r"\b(?:my goal is|I (?:want|intend|plan|aim|seek) to|I want (?:the|her|his|their|every)|I will)\b", 12)
     history = _collect(sentences, r"\b(?:I (?:was|used to|have been|once|grew up)|my (?:past|history|sister|brother|family)|I've (?:seen|lost|survived))\b", 12)
     relationships = _collect(sentences, r"\b(?:my (?:sister|brother|mother|father|wife|husband|partner|friend)|I (?:know|serve|follow|oppose)\s+(?:the\s+)?[A-Z])", 12)
     world_rules = _collect(sentences, r"\b(?:in this world|in this city|the world (?:is|has)|magic (?:works|requires|cannot)|there (?:is|are) no)\b", 16)
@@ -114,18 +196,21 @@ def derive_constitution(prompt: str) -> CampaignConstitution:
             tone = candidate
             break
 
-    return CampaignConstitution(
+    constitution = CampaignConstitution(
         premise=opening, genre=genre, tone=tone, player_identity=infer_player(text),
         traits=traits, history=history, known_history=history, abilities=abilities, powers=powers,
+        limitations=limitations, magic_rules=magic_rules, ability_catalogue=catalogue, goals=goals,
         important_relationships=relationships, world_rules=world_rules, important_factions=factions,
         starting_state=starting_state, mortality_rules=mortality_rules,
         hard_invariants=hard_invariants, hidden_canon_permissions=hidden_permissions,
         narrative_preferences=[s for s in sentences if any(
             p in s.casefold() for p in ("do not railroad", "don't railroad", "consequences", "npc", "agency", "tone")
         )][:20],
-        preferences=goals,
+        preferences=goals[:5],
         original_prompt=text,
     )
+    constitution.rules = constitution_rules(constitution)
+    return constitution
 
 
 THEME_DETAILS: dict[str, dict[str, str]] = {

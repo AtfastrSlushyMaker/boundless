@@ -129,6 +129,39 @@ class MLXStartRequest(BaseModel):
     model: str = Field(min_length=1, max_length=240)
 
 
+class ModelRoleUpdate(BaseModel):
+    """One AI role. ``inherit`` means "use the model this role falls back to"."""
+
+    role: Literal["state", "summary", "canon_repair", "state_fallback"]
+    inherit: bool = True
+    provider: Literal["mlx", "openai-compatible", "ollama", "deepseek"] = "mlx"
+    base_url: str = Field(default="http://127.0.0.1:8088/v1", max_length=400)
+    model: str = Field(default="", max_length=240)
+    temperature: float = Field(default=0.1, ge=0, le=2)
+    context_window: int = Field(default=32_768, ge=2_048, le=1_000_000)
+    api_key: str | None = Field(default=None, max_length=1024, exclude=True, repr=False)
+
+    @model_validator(mode="after")
+    def validate_endpoint(self):
+        if not self.inherit:
+            if not (self.base_url.startswith("http://") or self.base_url.startswith("https://")):
+                raise ValueError("Endpoint must begin with http:// or https://")
+            if not self.model.strip():
+                raise ValueError("Choose a model for this role.")
+            self.base_url = self.base_url.rstrip("/")
+        return self
+
+
+class ModelRolesUpdate(BaseModel):
+    roles: list[ModelRoleUpdate] = Field(default_factory=list, max_length=4)
+    hosted_fallback_enabled: bool = False
+
+
+class RepairApply(BaseModel):
+    finding_ids: list[str] = Field(default_factory=list, max_length=500)
+    include_high_confidence: bool = True
+
+
 class ModelSettingsUpdate(BaseModel):
     provider: Literal["mlx", "openai-compatible", "ollama", "deepseek"]
     base_url: str = Field(min_length=8, max_length=400)
@@ -171,6 +204,11 @@ class CampaignConstitution(BaseModel):
     soft_rules: list[str] = Field(default_factory=list)
     preferences: list[str] = Field(default_factory=list)
     hidden_canon_permissions: list[str] = Field(default_factory=list)
+    goals: list[str] = Field(default_factory=list)
+    # Structured, auditable versions of the above. Each rule keeps statement/type/strength/source.
+    ability_catalogue: list[dict[str, Any]] = Field(default_factory=list)
+    rules: list[dict[str, Any]] = Field(default_factory=list)
+    extraction: dict[str, Any] = Field(default_factory=dict)
     original_prompt: str
 
 
@@ -186,28 +224,83 @@ class ThemeProfile(BaseModel):
     contrast: Literal["standard", "high"] = "standard"
 
 
+OPERATION_KINDS = (
+    "CREATE_CHARACTER", "UPDATE_CHARACTER", "MOVE_CHARACTER", "CHANGE_CHARACTER_STATUS",
+    "REVEAL_CHARACTER_IDENTITY", "MERGE_CHARACTERS", "ADD_CHARACTER_ALIAS", "ADD_CHARACTER_FACT",
+    "ADD_ITEM", "REMOVE_ITEM", "TRANSFER_ITEM", "UPDATE_ITEM", "CREATE_LOCATION", "UPDATE_LOCATION",
+    "CREATE_EVENT", "CREATE_MEMORY", "CHANGE_RELATIONSHIP", "CREATE_FACTION",
+    "CHANGE_FACTION_RELATIONSHIP", "ADVANCE_WORLD_TIME", "CREATE_SECRET", "REVEAL_SECRET",
+    "CREATE_OBJECTIVE", "UPDATE_OBJECTIVE", "COMPLETE_OBJECTIVE", "FAIL_OBJECTIVE",
+    "ADD_CANON_RULE", "MODIFY_CANON_RULE", "UPDATE_MONEY", "GAIN_ABILITY", "LOSE_ABILITY",
+)
+KIND_ALIASES = {
+    "ADD_CHARACTER": "CREATE_CHARACTER", "NEW_CHARACTER": "CREATE_CHARACTER", "UPDATE_NPC": "UPDATE_CHARACTER",
+    "CREATE_NPC": "CREATE_CHARACTER", "SET_CHARACTER_STATUS": "CHANGE_CHARACTER_STATUS", "MOVE_PLAYER": "MOVE_CHARACTER",
+    "GAIN_ITEM": "ADD_ITEM", "LOSE_ITEM": "REMOVE_ITEM", "GIVE_ITEM": "TRANSFER_ITEM", "ADD_LOCATION": "CREATE_LOCATION",
+    "ADD_MEMORY": "CREATE_MEMORY", "ADD_EVENT": "CREATE_EVENT", "UPDATE_RELATIONSHIP": "CHANGE_RELATIONSHIP",
+    "ADD_OBJECTIVE": "CREATE_OBJECTIVE", "ADD_ABILITY": "GAIN_ABILITY", "LEARN_ABILITY": "GAIN_ABILITY",
+    "REMOVE_ABILITY": "LOSE_ABILITY", "REVEAL_IDENTITY": "REVEAL_CHARACTER_IDENTITY", "ADD_ALIAS": "ADD_CHARACTER_ALIAS",
+    "ADD_FACT": "ADD_CHARACTER_FACT", "ADVANCE_TIME": "ADVANCE_WORLD_TIME",
+}
+CERTAINTY_ALIASES = {"LOW": "INFERRED", "MEDIUM": "OBSERVED", "HIGH": "CONFIRMED", "CERTAIN": "CONFIRMED",
+                     "LIKELY": "INFERRED", "POSSIBLE": "RUMOR", "RUMOUR": "RUMOR"}
+
+
 class StateOperation(BaseModel):
-    kind: Literal[
-        "CREATE_CHARACTER", "UPDATE_CHARACTER", "MOVE_CHARACTER", "CHANGE_CHARACTER_STATUS",
-        "ADD_ITEM", "REMOVE_ITEM", "TRANSFER_ITEM", "CREATE_LOCATION", "UPDATE_LOCATION",
-        "CREATE_EVENT", "CREATE_MEMORY", "CHANGE_RELATIONSHIP", "CREATE_FACTION",
-        "CHANGE_FACTION_RELATIONSHIP", "ADVANCE_WORLD_TIME", "CREATE_SECRET", "REVEAL_SECRET",
-        "CREATE_OBJECTIVE", "UPDATE_OBJECTIVE", "ADD_CANON_RULE", "MODIFY_CANON_RULE",
-        "UPDATE_MONEY",
-    ]
+    """One proposed change. Known entities should be referenced by ID; names are a fallback."""
+
+    kind: Literal[OPERATION_KINDS]  # type: ignore[valid-type]
     subject: str = ""
     name: str = ""
+    character_id: str | None = None
+    target_id: str | None = None
+    item_id: str | None = None
+    location_id: str | None = None
+    objective_id: str | None = None
     value: dict[str, Any] = Field(default_factory=dict)
     certainty: Literal["CONFIRMED", "OBSERVED", "INFERRED", "RUMOR", "BELIEF", "UNKNOWN"] = "CONFIRMED"
     visibility: Literal["PLAYER_KNOWN", "CHARACTER_KNOWN", "WORLD_SECRET", "GM_ONLY"] = "PLAYER_KNOWN"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        kind = str(data.get("kind") or data.get("type") or data.get("op") or "").strip().upper().replace(" ", "_")
+        data["kind"] = KIND_ALIASES.get(kind, kind)
+        changes = data.pop("changes", None)
+        value = data.get("value")
+        if isinstance(changes, dict):
+            value = {**changes, **(value if isinstance(value, dict) else {})}
+        data["value"] = value if isinstance(value, dict) else {}
+        for key in ("subject", "name"):
+            if data.get(key) is None:
+                data[key] = ""
+            elif not isinstance(data.get(key), str):
+                data[key] = str(data[key])
+        for key in ("character_id", "target_id", "item_id", "location_id", "objective_id",
+                    "source_character_id", "target_character_id"):
+            if key in data and data[key] is not None and not isinstance(data[key], str):
+                data[key] = str(data[key])
+        if data.get("source_character_id") and not data.get("character_id"):
+            data["character_id"] = data.pop("source_character_id")
+        if data.get("target_character_id") and not data.get("target_id"):
+            data["target_id"] = data.pop("target_character_id")
+        certainty = str(data.get("certainty") or "CONFIRMED").strip().upper()
+        data["certainty"] = CERTAINTY_ALIASES.get(certainty, certainty) if certainty else "CONFIRMED"
+        if data["certainty"] not in {"CONFIRMED", "OBSERVED", "INFERRED", "RUMOR", "BELIEF", "UNKNOWN"}:
+            data["certainty"] = "OBSERVED"
+        return data
 
     @field_validator("visibility", mode="before")
     @classmethod
     def normalize_visibility(cls, value: Any) -> Any:
         if not isinstance(value, str):
-            return value
+            return "PLAYER_KNOWN" if value is None else value
         aliases = {"WORLD": "PLAYER_KNOWN", "PUBLIC": "PLAYER_KNOWN", "PLAYER": "PLAYER_KNOWN",
-                   "PRIVATE": "GM_ONLY", "HIDDEN": "GM_ONLY", "SECRET": "GM_ONLY"}
+                   "PRIVATE": "GM_ONLY", "HIDDEN": "GM_ONLY", "SECRET": "GM_ONLY", "LOW": "PLAYER_KNOWN",
+                   "MEDIUM": "PLAYER_KNOWN", "HIGH": "PLAYER_KNOWN", "": "PLAYER_KNOWN", "CHARACTER": "CHARACTER_KNOWN"}
         normalized = value.strip().upper()
         return aliases.get(normalized, normalized)
 
@@ -219,6 +312,18 @@ class StateInterpretation(BaseModel):
     knowledge_changes: list[dict[str, Any]] = Field(default_factory=list)
     relationship_changes: list[dict[str, Any]] = Field(default_factory=list)
     time_elapsed_seconds: int = Field(default=0, ge=0, le=31_536_000)
+    time_of_day: str = ""
+    scene_mood: str = ""
+    # Filled by the server, not the model: temporary ids offered for people not saved yet.
+    mention_ids: dict[str, str] = Field(default_factory=dict, exclude=True)
+
+    @field_validator("time_elapsed_seconds", mode="before")
+    @classmethod
+    def coerce_seconds(cls, value: Any) -> Any:
+        try:
+            return max(0, min(int(float(value)), 31_536_000))
+        except (TypeError, ValueError):
+            return 0
 
 
 class CampaignImport(BaseModel):

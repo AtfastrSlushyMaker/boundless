@@ -19,7 +19,14 @@ class Settings(BaseSettings):
     llm_context_window: int = 131072
     llm_max_output_tokens: int = 1200
     llm_temperature: float = 0.82
+    # hash (local, default), ollama, openai-compatible, or none.
+    embedding_provider: str = "hash"
     embedding_model: str = ""
+    embedding_base_url: str = ""
+    # Store raw state-interpreter output on each turn's diagnostics (structured output only).
+    state_debug: bool = False
+    # Tests run each case in its own event loop; pooled asyncpg connections cannot cross loops.
+    db_null_pool: bool = False
     host_mlx_supported: bool = False
     mlx_host_base_url: str = "http://host.docker.internal:8088/v1"
     mlx_launcher_base_url: str = "http://127.0.0.1:8091"

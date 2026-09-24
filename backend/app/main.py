@@ -8,17 +8,20 @@ from app.api.routes import router
 from app.core.config import settings
 from app.db.session import engine
 from app.services.portrait_jobs import portrait_worker
+from app.services.post_turn import post_turn_worker
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    worker = asyncio.create_task(portrait_worker())
+    workers = [asyncio.create_task(portrait_worker()), asyncio.create_task(post_turn_worker())]
     try:
         yield
     finally:
-        worker.cancel()
-        with suppress(asyncio.CancelledError):
-            await worker
+        for worker in workers:
+            worker.cancel()
+        for worker in workers:
+            with suppress(asyncio.CancelledError):
+                await worker
         await engine.dispose()
 
 

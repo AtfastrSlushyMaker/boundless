@@ -90,3 +90,12 @@ __pycache__/
 .DS_Store
 Thumbs.db
 Desktop.ini
+.backups/
+
+# Private campaign data and tools built from it (never commit)
+.backups/
+backend/tests/fixtures/tristan_regression.boundless.json
+backend/tests/test_tristan_regression.py
+backend/scripts/make_tristan_fixture.py
+backend/scripts/state_benchmark.py
+*.boundless.json

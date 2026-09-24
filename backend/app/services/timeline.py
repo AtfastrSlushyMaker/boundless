@@ -6,7 +6,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Branch, Checkpoint, Turn
 from app.services.context_builder import history_for_branch
+from app.services.idmap import remap_ids
 from app.services.state_service import restore_snapshot
+
+
+def _rebase(snapshot: dict, id_map: dict[str, str], branch_id: str) -> dict:
+    """Give every copied entity a new ID and point it at the child branch; turns stay shared."""
+    rebased = remap_ids(snapshot, id_map)
+    for rows in rebased.values():
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict) and row.get("branch_id"):
+                    row["branch_id"] = branch_id
+    return rebased
 
 
 async def _checkpoint_for(session: AsyncSession, branch_id: UUID, turn_id: UUID | None, turn_index: int | None = None):
@@ -90,17 +102,7 @@ async def fork_branch(session: AsyncSession, campaign_id: UUID, source_branch_id
         for row in rows:
             if row.get("id"):
                 id_map.setdefault(str(row["id"]), str(uuid4()))
-    for table, rows in snapshot.items():
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if row.get("id"):
-                row["id"] = id_map[str(row["id"])]
-            if row.get("branch_id"):
-                row["branch_id"] = str(child.id)
-            for key in ("from_character_id", "to_character_id"):
-                if row.get(key) and str(row[key]) in id_map:
-                    row[key] = id_map[str(row[key])]
+    snapshot = _rebase(snapshot, id_map, str(child.id))
     await restore_snapshot(session, child, snapshot)
     # Copy checkpoints for the shared ancestry so rewinding works before the fork point too.
     ancestry = await history_for_branch(session, fork_turn.id if fork_turn else None, limit=5000)
@@ -110,19 +112,7 @@ async def fork_branch(session: AsyncSession, campaign_id: UUID, source_branch_id
             Checkpoint.turn_index == turn.turn_index,
         ).order_by(Checkpoint.created_at.desc()))
         if prior:
-            copied = deepcopy(prior.state_snapshot)
-            for table, rows in copied.items():
-                if not isinstance(rows, list):
-                    continue
-                for row in rows:
-                    original_id = str(row.get("id", ""))
-                    if original_id in id_map:
-                        row["id"] = id_map[original_id]
-                    if row.get("branch_id"):
-                        row["branch_id"] = str(child.id)
-                    for key in ("from_character_id", "to_character_id"):
-                        if row.get(key) and str(row[key]) in id_map:
-                            row[key] = id_map[str(row[key])]
+            copied = _rebase(deepcopy(prior.state_snapshot), id_map, str(child.id))
             session.add(Checkpoint(campaign_id=campaign_id, branch_id=child.id, turn_id=turn.id,
                                    turn_index=turn.turn_index, state_snapshot=copied))
     source_initial = await session.scalar(select(Checkpoint).where(
@@ -130,18 +120,7 @@ async def fork_branch(session: AsyncSession, campaign_id: UUID, source_branch_id
         Checkpoint.turn_id.is_(None),
     ).order_by(Checkpoint.created_at.desc()))
     if source_initial:
-        initial_snapshot = deepcopy(source_initial.state_snapshot)
-        for rows in initial_snapshot.values():
-            if not isinstance(rows, list):
-                continue
-            for row in rows:
-                if row.get("id"):
-                    row["id"] = id_map[str(row["id"])]
-                if row.get("branch_id"):
-                    row["branch_id"] = str(child.id)
-                for key in ("from_character_id", "to_character_id"):
-                    if row.get(key) and str(row[key]) in id_map:
-                        row[key] = id_map[str(row[key])]
+        initial_snapshot = _rebase(deepcopy(source_initial.state_snapshot), id_map, str(child.id))
         session.add(Checkpoint(campaign_id=campaign_id, branch_id=child.id,
                                turn_id=None, turn_index=0, state_snapshot=initial_snapshot))
     session.add(Checkpoint(campaign_id=campaign_id, branch_id=child.id,

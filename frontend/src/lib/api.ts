@@ -43,7 +43,17 @@ export type Turn = {
   status: string;
   in_world_time: string;
   created_at: string;
+  attempt?: number;
+  changes?: TurnChange[];
+  metrics?: Record<string, number>;
 };
+
+export type TurnChange = { type: string; text: string };
+export type ProfileEntry = { id: string; text: string; source: "premise" | "story" | "record" | "player" | string; turn_index: number | null;
+  status: "active" | "past" | string; ended_turn_index?: number; note?: string; replaces?: string };
+export type PlayerProfile = { traits: ProfileEntry[]; goals: ProfileEntry[]; history: ProfileEntry[]; world_rules: ProfileEntry[];
+  reputation: ProfileEntry[]; updated_through_turn?: number };
+export type SceneMood = { mood: string; intensity: number; time_of_day?: string; source?: string; turn_index?: number };
 
 export type Branch = {
   id: string;
@@ -55,18 +65,40 @@ export type Branch = {
   current_state: Record<string, unknown>;
 };
 
-export type Character = { id: string; name: string; role: string; status: string; personality: string; motivations: string[]; knowledge: Array<{ fact: string; certainty?: string }>; attributes: Record<string, unknown> };
-export type Location = { id: string; name: string; region: string; description: string };
-export type Item = { id: string; name: string; quantity: number; condition: string; significance: string };
+export type Importance = "BACKGROUND" | "MINOR" | "RECURRING" | "MAJOR" | "COMPANION";
+export type CharacterAlias = { alias: string; type: string };
+export type CharacterFact = { id: string; content: string; type: string; certainty: string; provenance: string; turn_index: number | null };
+export type Ability = { id: string; name: string; description: string; source: string; status: string; acquired_turn_index: number | null; limitations: string[] };
+export type Character = {
+  id: string; name: string; role: string; status: string; personality: string; motivations: string[];
+  knowledge: Array<{ fact: string; certainty?: string; truth?: string }>; attributes: Record<string, unknown>;
+  importance?: Importance; aliases?: CharacterAlias[]; facts?: CharacterFact[]; abilities?: Ability[];
+  first_seen_turn_index?: number | null; last_seen_turn_index?: number | null;
+};
+export type Location = { id: string; name: string; region: string; description: string; aliases?: string[] };
+export type Item = { id: string; name: string; quantity: number; condition: string; significance: string; aliases?: string[] };
+export type Objective = {
+  id: string; title: string; status: "active" | "completed" | "failed" | "abandoned" | "superseded" | string;
+  description: string; aliases?: string[]; resolution_note?: string; created_turn_index?: number | null;
+  completed_turn_index?: number | null; failed_turn_index?: number | null;
+};
+export type RelationshipEvent = {
+  id: string; turn_index: number | null; turn_id: string | null; dimension: string;
+  before: number | null; after: number | null; delta: number | null; reason: string; location: string;
+};
 export type RelationshipHistoryEntry = { reason: string; turn_index?: number; turn_id?: string; location?: string };
 export type RelationshipLastInteraction = { turn_index?: number; turn_id?: string; location?: string };
 export type Relationship = {
   id: string;
   from: string;
   to: string;
+  from_id?: string;
+  to_id?: string;
+  events?: RelationshipEvent[];
   summary: string;
   dimensions: Record<string, unknown> & {
     trust?: number; respect?: number; fear?: number; hostility?: number;
+    affection?: number; loyalty?: number; attraction?: number; debt?: number; dependence?: number;
     kinship?: string; awareness?: string;
     history?: RelationshipHistoryEntry[];
     last_interaction?: RelationshipLastInteraction;
@@ -98,13 +130,28 @@ export type CampaignDetail = {
   items: Item[];
   inventory: Item[];
   relationships: Relationship[];
-  objectives: Array<Record<string, unknown>>;
+  objectives: Objective[];
   events: EventRecord[];
   memories: Array<Record<string, unknown>>;
   canon_rules: CanonRule[];
   known_secrets: Secret[];
   summary: string;
+  summary_state?: { through_turn_index: number; last_attempt_turn_index: number; last_success_at: string | null; last_error: string; method: string } | null;
 };
+
+export type ModelRole = "state" | "summary" | "canon_repair" | "state_fallback";
+export type ModelRoleSetting = {
+  role: ModelRole; inherit: boolean; provider: ModelSettings["provider"]; base_url: string; model: string;
+  temperature: number; context_window: number; hosted: boolean;
+  effective: { provider: string; model: string; hosted: boolean; source_role?: string } | null;
+};
+export type ModelRoles = {
+  narrator: Partial<ModelSettings>; narrator_hosted: boolean; roles: ModelRoleSetting[]; hosted_fallback_enabled: boolean;
+};
+export type RepairFinding = {
+  id: string; type: string; confidence: "HIGH" | "PROBABLE" | "AMBIGUOUS"; summary: string; evidence: string[]; auto: boolean;
+};
+export type RepairReport = { head_turn_index: number; findings: RepairFinding[]; counts: Record<string, number> };
 
 export type ModelSettings = {
   provider: "mlx" | "openai-compatible" | "ollama" | "deepseek";
@@ -155,7 +202,8 @@ export type MlxRuntime = {
 export type StreamEvent =
   | { type: "delta"; text: string; turn_id: string }
   | { type: "replace"; text: string; turn_id: string; reason?: string }
-  | { type: "complete"; turn_id: string; turn_index: number; branch_id: string; state_delta: unknown }
+  | { type: "status"; stage: string; turn_id: string }
+  | { type: "complete"; turn_id: string; turn_index: number; branch_id: string; state_delta: unknown; changes?: TurnChange[]; metrics?: Record<string, number> }
   | { type: "error"; turn_id?: string; message: string };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -185,6 +233,7 @@ export const api = {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ theme_family: themeFamily }),
   }),
   refreshSetup: (id: string, branchId: string) => request<CampaignDetail>(`/api/campaigns/${id}/refresh-setup?branch_id=${branchId}`, { method: "POST" }),
+  refreshStory: (id: string, branchId: string) => request<{ changes: TurnChange[]; campaign: CampaignDetail }>(`/api/campaigns/${id}/refresh-story?branch_id=${branchId}`, { method: "POST" }),
   reindexPeople: (id: string, branchId: string) => request<CampaignDetail>(`/api/campaigns/${id}/reindex-people?branch_id=${branchId}`, { method: "POST" }),
   generateAvatar: (campaignId: string, branchId: string, characterId: string, newSeed = false) =>
     request<{ done: boolean; job_id: string; status: string }>(`/api/campaigns/${campaignId}/characters/${characterId}/avatar?branch_id=${branchId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ new_seed: newSeed }) }),
@@ -226,6 +275,15 @@ export const api = {
   ollamaModels: (baseUrl: string) => request<{ models: string[] }>(`/api/settings/ollama/models?base_url=${encodeURIComponent(baseUrl)}`),
   compatibleModels: (baseUrl: string) => request<{ models: string[] }>(`/api/settings/openai-compatible/models?base_url=${encodeURIComponent(baseUrl)}`),
   deepseekModels: (apiKey?: string) => request<{ models: string[] }>("/api/settings/deepseek/models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: apiKey || undefined }) }),
+  modelRoles: () => request<ModelRoles>("/api/settings/roles"),
+  saveModelRoles: (payload: { roles: Array<Partial<ModelRoleSetting> & { role: ModelRole; inherit: boolean; api_key?: string }>; hosted_fallback_enabled: boolean }) =>
+    request<ModelRoles>("/api/settings/roles", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+  repairReport: (id: string, branchId: string) => request<RepairReport>(`/api/campaigns/${id}/repair?branch_id=${branchId}`),
+  applyRepair: (id: string, branchId: string, findingIds: string[], includeHigh: boolean) =>
+    request<{ result: { applied: string[] }; campaign: CampaignDetail }>(`/api/campaigns/${id}/repair?branch_id=${branchId}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ finding_ids: findingIds, include_high_confidence: includeHigh }),
+    }),
   saveSettings: (settings: ModelSettings & { api_key?: string }) => request<ModelSettings>("/api/settings/model", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) }),
 };
 

@@ -165,7 +165,7 @@ cd frontend && npm run lint
 cd frontend && npm run build
 ```
 
-The integration tests use local PostgreSQL and remove campaigns they create. `make test` and `make lint` run the backend tests and both linters from the repository root. To rebuild just the app images, run `docker compose build api web`.
+The integration tests use a separate `boundless_test` database (created and migrated by `make test`) and never touch your campaigns. `make test` and `make lint` run the backend tests and both linters from the repository root. To rebuild just the app images, run `docker compose build api web`.
 
 ## Troubleshooting
 

@@ -15,11 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.secrets import get_deepseek_api_key, save_deepseek_api_key
 from app.db.models import (
+    Ability,
     Branch,
     Campaign,
     CampaignSummary,
     CanonRule,
     Character,
+    CharacterAlias,
+    CharacterFact,
     CharacterRelationship,
     Checkpoint,
     Event,
@@ -32,6 +35,8 @@ from app.db.models import (
     ModelProfile,
     Objective,
     PortraitJob,
+    PostTurnJob,
+    RelationshipEvent,
     Secret,
     Turn,
 )
@@ -40,6 +45,7 @@ from app.llm.base import ModelUnavailable
 from app.llm.gateway import DeepSeekProvider, mlx_base_url
 from app.llm.ollama import OllamaProvider
 from app.llm.openai_compatible import OpenAICompatibleProvider
+from app.llm.router import ROLES, is_hosted, route
 from app.schemas import (
     BranchCreate,
     CampaignCreate,
@@ -50,9 +56,11 @@ from app.schemas import (
     DeepSeekModelsRequest,
     ImageSettingsUpdate,
     MLXStartRequest,
+    ModelRolesUpdate,
     ModelSettingsUpdate,
     PortraitRequest,
     RelationshipUpdate,
+    RepairApply,
     RewindRequest,
     TurnCreate,
     TurnEdit,
@@ -60,10 +68,12 @@ from app.schemas import (
 )
 from app.services.campaign_service import create_campaign, refresh_setup_from_premise
 from app.services.canon_guard import check_narrative, player_death_stated
+from app.services.character_store import StoreLog, add_alias, ensure_identity_rows
 from app.services.choice_service import suggest_choices
 from app.services.constitution import derive_theme
 from app.services.context_builder import history_for_branch
 from app.services.export_service import export_campaign, import_campaign
+from app.services.identity import normalize_reference
 from app.services.image_provider import (
     MAX_IMAGE_BYTES,
     ComfyUIImageProvider,
@@ -77,17 +87,22 @@ from app.services.portrait_jobs import (
     enqueue_portrait,
     image_profile,
     profile_dict,
-    queue_automatic_portraits,
 )
+from app.services.post_turn import describe_jobs, enqueue, run_jobs
+from app.services.repair_service import analyze_campaign, apply_repair
 from app.services.state_service import (
     apply_interpretation,
     capture_snapshot,
     player_says_alive,
     restore_snapshot,
 )
-from app.services.summary_service import update_campaign_summary
 from app.services.timeline import fork_branch, rewind_branch
-from app.services.turn_service import _interpret, active_profile, provider_for_profile, stream_turn
+from app.services.turn_service import (
+    active_profile,
+    interpret_turn,
+    provider_for_profile,
+    stream_turn,
+)
 from app.services.world_index import index_people_from_narration, player_location_for_turn
 
 router = APIRouter()
@@ -133,20 +148,63 @@ async def _ensure_branch_choices(session: AsyncSession, campaign: Campaign, bran
 
 def _model_status(profile: ModelProfile | None) -> dict:
     if not profile:
-        return {"provider": "mlx", "model": "lukey03/Qwen3.5-9B-abliterated-MLX-4bit", "status": "not_configured"}
+        return {"provider": settings.llm_provider, "model": settings.llm_model,
+                "base_url": mlx_base_url(settings.llm_base_url) if settings.llm_provider == "mlx" else settings.llm_base_url,
+                "context_window": settings.llm_context_window, "response_length": "standard",
+                "temperature": settings.llm_temperature, "status": "not_configured"}
     return {"provider": profile.provider, "model": profile.model,
             "base_url": mlx_base_url(profile.base_url) if profile.provider == "mlx" else profile.base_url,
             "context_window": profile.context_window, "response_length": profile.response_length,
             "temperature": profile.temperature}
 
 
+NOISE_REASONS = {"first appeared in the story", "appeared in the story"}
+
+
+def _history_entries(relation: CharacterRelationship, events: list[RelationshipEvent]) -> list[dict]:
+    rows = [{"id": str(event.id), "turn_index": event.turn_index, "turn_id": str(event.turn_id) if event.turn_id else None,
+             "dimension": event.dimension, "before": event.before_value, "after": event.after_value,
+             "delta": event.delta, "reason": event.reason, "location": event.location}
+            for event in events if event.reason or event.delta]
+    return sorted(rows, key=lambda row: (row["turn_index"] if row["turn_index"] is not None else -1))
+
+
 async def _detail(session: AsyncSession, campaign: Campaign, branch: Branch) -> dict:
     turns = await history_for_branch(session, branch.head_turn_id, limit=180)
-    visible_turns = jsonable_encoder(turns)
-    for turn in visible_turns:
-        turn["gm_response"] = clean_history_narration(turn.get("gm_response") or "")
+    visible_turns = []
+    for turn in turns:
+        row = jsonable_encoder(turn, exclude={"diagnostics", "state_delta"})
+        row["gm_response"] = clean_history_narration(turn.gm_response or "")
+        row["changes"] = (turn.state_delta or {}).get("changes", [])
+        row["metrics"] = (turn.diagnostics or {}).get("metrics", {})
+        visible_turns.append(row)
     characters = list((await session.scalars(select(Character).where(
         Character.branch_id == branch.id, Character.visibility == "PLAYER_KNOWN").order_by(Character.name))).all())
+    aliases: dict = {}
+    for row in (await session.scalars(select(CharacterAlias).where(CharacterAlias.branch_id == branch.id))).all():
+        aliases.setdefault(row.character_id, []).append({"alias": row.alias, "type": row.alias_type})
+    facts: dict = {}
+    for row in (await session.scalars(select(CharacterFact).where(
+            CharacterFact.branch_id == branch.id, CharacterFact.active.is_(True),
+            CharacterFact.visibility == "PLAYER_KNOWN").order_by(CharacterFact.created_at))).all():
+        facts.setdefault(row.character_id, []).append({"id": str(row.id), "content": row.content, "type": row.fact_type,
+                                                       "certainty": row.certainty, "provenance": row.provenance,
+                                                       "turn_index": row.first_seen_turn_index})
+    abilities: dict = {}
+    for row in (await session.scalars(select(Ability).where(Ability.branch_id == branch.id,
+                                                             Ability.visibility == "PLAYER_KNOWN").order_by(Ability.created_at))).all():
+        abilities.setdefault(row.character_id, []).append({"id": str(row.id), "name": row.name, "description": row.description,
+                                                           "source": row.source, "status": row.status,
+                                                           "acquired_turn_index": row.acquired_turn_index,
+                                                           "limitations": row.limitations})
+    character_rows = []
+    for character in characters:
+        row = jsonable_encoder(character, exclude={"provenance"})
+        row["aliases"] = [entry for entry in aliases.get(character.id, [])
+                          if normalize_reference(entry["alias"]) != normalize_reference(character.name)]
+        row["facts"] = facts.get(character.id, [])
+        row["abilities"] = abilities.get(character.id, [])
+        character_rows.append(row)
     locations = list((await session.scalars(select(Location).where(
         Location.branch_id == branch.id, Location.visibility == "PLAYER_KNOWN").order_by(Location.name))).all())
     factions = list((await session.scalars(select(Faction).where(
@@ -156,37 +214,56 @@ async def _detail(session: AsyncSession, campaign: Campaign, branch: Branch) -> 
     objectives = list((await session.scalars(select(Objective).where(
         Objective.branch_id == branch.id, Objective.visibility == "PLAYER_KNOWN").order_by(Objective.status, Objective.title))).all())
     events = list((await session.scalars(select(Event).where(
-        Event.branch_id == branch.id, Event.visibility == "PLAYER_KNOWN").order_by(Event.created_at.desc()))).all())
+        Event.branch_id == branch.id, Event.visibility == "PLAYER_KNOWN").order_by(Event.created_at.desc()).limit(80))).all())
     memories = list((await session.scalars(select(Memory).where(
-        Memory.branch_id == branch.id, Memory.visibility == "PLAYER_KNOWN").order_by(Memory.importance.desc(), Memory.created_at.desc()).limit(40))).all())
+        Memory.branch_id == branch.id, Memory.visibility == "PLAYER_KNOWN", Memory.memory_type != "TURN",
+    ).order_by(Memory.importance.desc(), Memory.created_at.desc()).limit(40))).all())
     rules = list((await session.scalars(select(CanonRule).where(
         CanonRule.campaign_id == campaign.id,
         (CanonRule.branch_id.is_(None) | (CanonRule.branch_id == branch.id)),
         CanonRule.visibility == "PLAYER_KNOWN").order_by(CanonRule.created_at))).all())
     relations = list((await session.scalars(select(CharacterRelationship).where(
         CharacterRelationship.branch_id == branch.id, CharacterRelationship.visibility == "PLAYER_KNOWN"))).all())
+    relation_events: dict = {}
+    for event in (await session.scalars(select(RelationshipEvent).where(
+            RelationshipEvent.branch_id == branch.id, RelationshipEvent.visibility != "GM_ONLY"))).all():
+        relation_events.setdefault(event.relationship_id, []).append(event)
     known_secrets = list((await session.scalars(select(Secret).where(
         Secret.branch_id == branch.id, Secret.visibility == "PLAYER_KNOWN"))).all())
     branches = list((await session.scalars(select(Branch).where(Branch.campaign_id == campaign.id).order_by(Branch.created_at))).all())
     char_map = {row.id: row.name for row in characters}
-    relationship_data = [{"id": str(row.id), "from": char_map[row.from_character_id],
-        "to": char_map[row.to_character_id], "dimensions": row.dimensions, "summary": row.summary}
-        for row in relations if row.from_character_id in char_map and row.to_character_id in char_map]
+    relationship_data = []
+    for row in relations:
+        if row.from_character_id not in char_map or row.to_character_id not in char_map:
+            continue
+        dimensions = {key: value for key, value in (row.dimensions or {}).items() if key != "history"}
+        history = [entry for entry in (row.dimensions or {}).get("history", []) or []
+                   if isinstance(entry, dict) and str(entry.get("reason", "")).casefold() not in NOISE_REASONS]
+        relationship_data.append({"id": str(row.id), "from": char_map[row.from_character_id], "to": char_map[row.to_character_id],
+                                  "from_id": str(row.from_character_id), "to_id": str(row.to_character_id),
+                                  "dimensions": {**dimensions, "history": history}, "summary": row.summary,
+                                  "events": _history_entries(row, relation_events.get(row.id, []))})
     current_location = branch.current_state.get("current_location", "")
     summary = await session.scalar(select(CampaignSummary).where(
         CampaignSummary.branch_id == branch.id, CampaignSummary.summary_type == "campaign"))
+    player_key = normalize_reference(campaign.protagonist_name)
     return jsonable_encoder({
         "id": campaign.id, "title": campaign.title, "original_prompt": campaign.original_prompt,
-        "constitution": campaign.constitution, "theme": campaign.theme_profile,
+        "constitution": {key: value for key, value in (campaign.constitution or {}).items()},
+        "theme": campaign.theme_profile,
         "protagonist_name": campaign.protagonist_name, "genre": campaign.genre, "game_mode": campaign.game_mode,
         "archived": campaign.archived, "created_at": campaign.created_at, "updated_at": campaign.updated_at,
         "active_branch_id": campaign.active_branch_id, "branch": branch,
         "branches": branches, "turns": visible_turns, "current_state": branch.current_state,
-        "current_location": current_location, "characters": characters, "locations": locations,
-        "factions": factions, "inventory": [row for row in items if row.owner_name.casefold() in {campaign.protagonist_name.casefold(), "player"}],
+        "current_location": current_location, "characters": character_rows, "locations": locations,
+        "factions": factions,
+        "inventory": [row for row in items if normalize_reference(row.owner_name) in {player_key, "player"}],
         "items": items, "relationships": relationship_data, "objectives": objectives,
         "events": events, "memories": memories, "canon_rules": rules,
         "known_secrets": known_secrets, "summary": summary.content if summary else "",
+        "summary_state": {"through_turn_index": summary.through_turn_index, "last_attempt_turn_index": summary.last_attempt_turn_index,
+                          "last_success_at": summary.last_success_at, "last_error": summary.last_error,
+                          "method": summary.method} if summary else None,
     })
 
 
@@ -325,6 +402,67 @@ async def write_model_settings(payload: ModelSettingsUpdate, session: AsyncSessi
     await session.commit()
     await session.refresh(profile)
     return _model_status(profile)
+
+
+async def _roles_payload(session: AsyncSession) -> dict:
+    roles = []
+    for role in ROLES:
+        if role == "narrator":
+            continue
+        own = await session.scalar(select(ModelProfile).where(ModelProfile.role == role).order_by(ModelProfile.updated_at.desc()))
+        routed = await route(session, role, provider_for_profile) if role != "state_fallback" else None
+        roles.append({
+            "role": role, "inherit": not (own and own.active),
+            "provider": own.provider if own else "mlx", "base_url": own.base_url if own else "",
+            "model": own.model if own else "", "temperature": own.temperature if own else 0.1,
+            "context_window": own.context_window if own else 32768,
+            "hosted": is_hosted(own.provider, own.base_url) if own and own.active else (routed.hosted if routed else False),
+            "effective": routed.describe() if routed else (
+                {"provider": own.provider, "model": own.model, "hosted": is_hosted(own.provider, own.base_url)} if own and own.active else None),
+        })
+    narrator = await active_profile(session)
+    return {"narrator": _model_status(narrator), "narrator_hosted": is_hosted(narrator.provider, narrator.base_url) if narrator else False,
+            "roles": roles, "hosted_fallback_enabled": any(row["role"] == "state_fallback" and not row["inherit"] for row in roles)}
+
+
+@router.get("/settings/roles")
+async def read_model_roles(session: AsyncSession = Depends(get_session)):
+    return await _roles_payload(session)
+
+
+@router.put("/settings/roles")
+async def write_model_roles(payload: ModelRolesUpdate, session: AsyncSession = Depends(get_session)):
+    for update in payload.roles:
+        own = await session.scalar(select(ModelProfile).where(ModelProfile.role == update.role))
+        enabled = not update.inherit and (update.role != "state_fallback" or payload.hosted_fallback_enabled)
+        if not enabled:
+            if own:
+                own.active = False
+            continue
+        if update.provider == "mlx" and not _mlx_supported():
+            raise HTTPException(422, "MLX requires Apple Silicon running macOS.")
+        if update.provider == "deepseek" and update.api_key:
+            try:
+                save_deepseek_api_key(update.api_key)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        if own is None:
+            own = ModelProfile(role=update.role)
+            session.add(own)
+        own.name = f"{update.role.replace('_', ' ').title()} model"
+        own.provider = update.provider
+        own.base_url = "https://api.deepseek.com" if update.provider == "deepseek" else (
+            mlx_base_url(update.base_url) if update.provider == "mlx" else update.base_url)
+        own.model = update.model.strip()
+        own.temperature = update.temperature
+        own.context_window = update.context_window
+        own.active = True
+    if not payload.hosted_fallback_enabled:
+        fallback = await session.scalar(select(ModelProfile).where(ModelProfile.role == "state_fallback"))
+        if fallback:
+            fallback.active = False
+    await session.commit()
+    return await _roles_payload(session)
 
 
 @router.get("/settings/images")
@@ -532,8 +670,13 @@ async def update_character(campaign_id: UUID, character_id: UUID, branch_id: UUI
     campaign = await _campaign(session, campaign_id)
     branch = await _branch(session, campaign, branch_id)
     character = await _known_character(session, campaign_id, branch_id, character_id)
+    # Player edits are explicit canon: they may override anything, and model updates cannot undo them.
     character.role = payload.role.strip()
     character.personality = payload.personality.strip()
+    character.provenance = {**(character.provenance or {}), "role": "PLAYER_EXPLICIT", "personality": "PLAYER_EXPLICIT",
+                            **{key: "PLAYER_EXPLICIT" for key in ("sex", "gender", "pronouns") if getattr(payload, key).strip()}}
+    if payload.role.strip():
+        await add_alias(session, character, payload.role.strip(), "TITLE", source="player_edit", confidence=1.0)
     attributes = dict(character.attributes or {})
     for key in ("appearance", "sex", "gender", "pronouns"):
         value = getattr(payload, key).strip()
@@ -558,10 +701,16 @@ async def update_relationship(campaign_id: UUID, relationship_id: UUID, branch_i
     dimensions = dict(relation.dimensions or {})
     for axis in ("trust", "respect", "fear", "hostility"):
         value = getattr(payload, axis)
+        before = dimensions.get(axis)
         if value is None:
             dimensions.pop(axis, None)
         else:
             dimensions[axis] = value
+        if before != value and value is not None:
+            session.add(RelationshipEvent(campaign_id=campaign.id, branch_id=branch.id, relationship_id=relation.id,
+                                          dimension=axis, before_value=before if isinstance(before, (int, float)) else None,
+                                          after_value=value, delta=value - before if isinstance(before, (int, float)) else None,
+                                          reason="Set by the player", visibility=relation.visibility))
     if payload.status.strip():
         dimensions["status"] = payload.status.strip()
     else:
@@ -615,19 +764,39 @@ async def refresh_campaign_setup(campaign_id: UUID, branch_id: UUID | None = Non
     return await _detail(session, campaign, branch)
 
 
+@router.post("/campaigns/{campaign_id}/refresh-story")
+async def refresh_from_story(campaign_id: UUID, branch_id: UUID | None = None, session: AsyncSession = Depends(get_session)):
+    """Re-read the story so far and update traits, goals, history, world rules, and reputation."""
+    from app.services.story_profile import evolve_profile
+
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    routed = await route(session, "summary", provider_for_profile)
+    try:
+        notes = await evolve_profile(session, routed.provider, campaign, branch, force=True)
+    except ModelUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, f"The model's profile update could not be read: {str(exc)[:200]}") from exc
+    await session.commit()
+    return {"changes": notes, "campaign": await _detail(session, campaign, branch)}
+
+
 @router.post("/campaigns/{campaign_id}/reindex-people")
 async def reindex_campaign_people(campaign_id: UUID, branch_id: UUID | None = None,
                                   session: AsyncSession = Depends(get_session)):
     campaign = await _campaign(session, campaign_id)
     branch = await _branch(session, campaign, branch_id)
+    await ensure_identity_rows(session, branch.id)
     last_death = -1
     last_alive_correction = -1
     starting_state = (campaign.constitution or {}).get("starting_state", {})
     current_location = str(starting_state.get("current_location", "")) if isinstance(starting_state, dict) else ""
-    for turn in await history_for_branch(session, branch.head_turn_id, limit=500):
+    log = StoreLog()
+    for turn in await history_for_branch(session, branch.head_turn_id, limit=5000):
         current_location = player_location_for_turn(campaign, turn, current_location)
         if turn.status == "complete" and turn.gm_response:
-            await index_people_from_narration(session, campaign, branch, turn, current_location)
+            await index_people_from_narration(session, campaign, branch, turn, current_location, log)
             if player_death_stated(turn.gm_response, campaign.protagonist_name):
                 last_death = turn.turn_index
         if player_says_alive(turn.player_action, campaign.protagonist_name):
@@ -648,6 +817,55 @@ async def reindex_campaign_people(campaign_id: UUID, branch_id: UUID | None = No
                 checkpoint.state_snapshot = await capture_snapshot(session, branch)
     await session.commit()
     return await _detail(session, campaign, branch)
+
+
+@router.get("/campaigns/{campaign_id}/diagnostics")
+async def campaign_diagnostics(campaign_id: UUID, branch_id: UUID | None = None, limit: int = Query(default=30, le=200),
+                               session: AsyncSession = Depends(get_session)):
+    """Development view of state extraction: structured outputs and decisions only, never hidden reasoning."""
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    turns = await history_for_branch(session, branch.head_turn_id, limit=limit)
+    failed = (await session.scalars(select(Turn).where(Turn.branch_id == branch.id, Turn.canonical.is_(False))
+                                    .order_by(Turn.created_at.desc()).limit(20))).all()
+    jobs = (await session.scalars(select(PostTurnJob).where(PostTurnJob.branch_id == branch.id)
+                                  .order_by(PostTurnJob.created_at.desc()).limit(40))).all()
+    summary = await session.scalar(select(CampaignSummary).where(
+        CampaignSummary.branch_id == branch.id, CampaignSummary.summary_type == "campaign"))
+    totals: dict[str, int] = {}
+    for turn in turns:
+        for key, value in ((turn.diagnostics or {}).get("metrics") or {}).items():
+            if isinstance(value, int):
+                totals[key] = totals.get(key, 0) + value
+    return jsonable_encoder({
+        "turns": [{"turn_index": turn.turn_index, "id": turn.id, "attempt": turn.attempt, "diagnostics": turn.diagnostics,
+                   "changes": (turn.state_delta or {}).get("changes", [])} for turn in turns],
+        "metric_totals": totals,
+        "failed_attempts": [{"id": turn.id, "turn_index": turn.turn_index, "status": turn.status, "attempt": turn.attempt,
+                             "action": turn.player_action[:200], "error": (turn.diagnostics or {}).get("error")} for turn in failed],
+        "jobs": describe_jobs(list(jobs)),
+        "summary": {"through_turn_index": summary.through_turn_index, "last_attempt_turn_index": summary.last_attempt_turn_index,
+                    "last_success_at": summary.last_success_at, "last_error": summary.last_error,
+                    "method": summary.method} if summary else None,
+    })
+
+
+@router.get("/campaigns/{campaign_id}/repair")
+async def campaign_repair_report(campaign_id: UUID, branch_id: UUID | None = None, session: AsyncSession = Depends(get_session)):
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    return await analyze_campaign(session, campaign, branch)
+
+
+@router.post("/campaigns/{campaign_id}/repair")
+async def campaign_repair_apply(campaign_id: UUID, payload: RepairApply, branch_id: UUID | None = None,
+                                session: AsyncSession = Depends(get_session)):
+    campaign = await _campaign(session, campaign_id)
+    branch = await _branch(session, campaign, branch_id)
+    result = await apply_repair(session, campaign, branch, set(payload.finding_ids),
+                                include_high_confidence=payload.include_high_confidence)
+    await session.commit()
+    return {"result": result, "campaign": await _detail(session, campaign, branch)}
 
 
 @router.post("/campaigns/{campaign_id}/archive")
@@ -735,6 +953,10 @@ async def rewind(campaign_id: UUID, payload: RewindRequest, branch_id: UUID | No
     return await _detail(session, campaign, changed)
 
 
+def _job_factory(profile):
+    return provider_for_profile(profile)
+
+
 @router.post("/campaigns/{campaign_id}/turns/stream")
 async def create_turn(campaign_id: UUID, payload: TurnCreate, request: Request, session: AsyncSession = Depends(get_session)):
     campaign = await _campaign(session, campaign_id)
@@ -746,21 +968,10 @@ async def create_turn(campaign_id: UUID, payload: TurnCreate, request: Request, 
             async for event in stream_turn(session, campaign, branch, action_for_gm, payload.instruction):
                 if await request.is_disconnected():
                     break
-                if event.get("type") == "complete":
-                    try:
-                        await queue_automatic_portraits(session, campaign, branch.id)
-                    except Exception:
-                        await session.rollback()
-                        logger.exception("Automatic portrait queueing failed after a completed turn")
                 yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
                 if event.get("type") == "complete":
-                    profile = await active_profile(session)
-                    try:
-                        await update_campaign_summary(session, provider_for_profile(profile), campaign,
-                            branch.id, branch.head_turn_id, int(event.get("turn_index", 0)))
-                    except Exception:
-                        await session.rollback()
-                        logger.exception("Campaign summary update failed after a completed turn")
+                    # Optional work runs after the turn committed; its failures stay on the job rows.
+                    await run_jobs([UUID(job_id) for job_id in event.get("jobs", [])], _job_factory)
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:600]})}\n\n"
         yield "data: [DONE]\n\n"
@@ -789,11 +1000,13 @@ async def edit_turn(turn_id: UUID, payload: TurnEdit, session: AsyncSession = De
     if violation:
         await session.rollback()
         raise HTTPException(422, violation)
+    previous_state = dict(branch.current_state or {})
     turn.gm_response = payload.content.strip()
+    interpretation, interpreter_diagnostics = await interpret_turn(session, campaign, branch, turn, previous_state)
+    log = StoreLog()
+    await apply_interpretation(session, campaign, branch, turn, interpretation, log)
     profile = await active_profile(session)
     provider = provider_for_profile(profile)
-    interpretation = await _interpret(session, provider, campaign, branch, turn, branch.current_state or {})
-    await apply_interpretation(session, campaign, branch, turn, interpretation)
     turn.suggested_actions = (await suggest_choices(provider, turn.gm_response, turn.player_action,
                               campaign.protagonist_name)) if campaign.game_mode == "guided" else []
     versions = list((await session.scalars(select(MessageVersion).where(MessageVersion.turn_id == turn.id, MessageVersion.role == "gm"))).all())
@@ -802,10 +1015,14 @@ async def edit_turn(turn_id: UUID, payload: TurnEdit, session: AsyncSession = De
     session.add(MessageVersion(turn_id=turn.id, role="gm", version=max((row.version for row in versions), default=0) + 1,
                                content=turn.gm_response, active=True))
     turn.status = "complete"
+    turn.canonical = True
+    turn.diagnostics = {"edited": True, "interpreter": interpreter_diagnostics, **log.as_dict()}
     branch.head_turn_id = turn.id
     session.add(Checkpoint(campaign_id=campaign.id, branch_id=branch.id, turn_id=turn.id,
         turn_index=turn.turn_index, state_snapshot=await capture_snapshot(session, branch)))
+    jobs = [enqueue(session, campaign_id=campaign.id, branch_id=branch.id, turn_id=turn.id, kind="MEMORY_EMBEDDING")]
     await session.commit()
+    await run_jobs([job.id for job in jobs], _job_factory)
     return await _detail(session, campaign, branch)
 
 
@@ -822,13 +1039,9 @@ async def regenerate_turn(turn_id: UUID, payload: TurnCreate, request: Request, 
                                       payload.instruction or payload.action, existing_turn=turn):
             if await request.is_disconnected():
                 break
-            if event.get("type") == "complete":
-                try:
-                    await queue_automatic_portraits(session, campaign, branch.id)
-                except Exception:
-                    await session.rollback()
-                    logger.exception("Automatic portrait queueing failed after a rewritten turn")
             yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+            if event.get("type") == "complete":
+                await run_jobs([UUID(job_id) for job_id in event.get("jobs", [])], _job_factory)
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

@@ -33,9 +33,13 @@ def validate_endpoint(value: str) -> str:
 
 
 def importance_for(character) -> str:
-    explicit = str((character.attributes or {}).get("importance", "")).upper()
+    attributes = character.attributes or {}
+    explicit = str(attributes.get("importance_override") or attributes.get("importance", "")).upper()
     if explicit in {"BACKGROUND", "MINOR", "RECURRING", "MAJOR", "COMPANION"}:
         return explicit
+    computed = str(getattr(character, "importance", "") or "").upper()
+    if computed in {"BACKGROUND", "RECURRING", "MAJOR", "COMPANION"}:
+        return computed
     role = (character.role or "").lower()
     if any(word in role for word in ("companion", "party member")):
         return "COMPANION"
