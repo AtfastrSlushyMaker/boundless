@@ -229,3 +229,30 @@ async def test_recurring_portrait_retries_offline_then_completes(client, scripte
         assert (tmp_path / job.image_path).is_file()
         assert person.attributes["avatar_url"] == f"/api/portraits/{job.id}"
         assert "avatar_job" not in person.attributes
+
+
+def test_visual_identity_is_stable_and_mature_detail_needs_a_confirmed_adult():
+    from app.services.visual_identity import confirmed_adult, merge_visual
+
+    visual = merge_visual({}, {"apparent_age": "late thirties", "hair": "cropped gray hair", "clothing": "dark coat",
+                               "adult": True, "body": "bare shoulders marked with old scars"})
+    assert visual["body"] and confirmed_adult(visual)
+    visual = merge_visual(visual, {"hair": "long red hair", "clothing": "gray temple robe"})
+    assert visual["hair"] == "cropped gray hair" and visual["clothing"] == "gray temple robe"
+    minor = merge_visual({}, {"apparent_age": "about 12", "hair": "messy brown", "adult": True, "body": "anything"})
+    assert "body" not in minor and minor["adult"] is False and not confirmed_adult(minor)
+    unknown = merge_visual({}, {"apparent_age": "unclear", "adult": True, "body": "undressed"})
+    assert "body" not in unknown and not confirmed_adult(unknown)
+
+
+def test_mature_portraits_are_opt_in_and_never_for_minors():
+    adult = character(visual_identity={"apparent_age": "early forties", "adult": True, "body": "undressed to the waist",
+                                       "hair": "black braid"})
+    positive, negative = portrait_prompt(adult, campaign())
+    assert "undressed" not in positive and "nudity" in negative
+    positive, negative = portrait_prompt(adult, campaign(), allow_mature=True)
+    assert "undressed to the waist" in positive and "nudity" not in negative
+    child = character(visual_identity={"apparent_age": "about 12", "adult": True, "body": "undressed"})
+    child.role = "street kid"
+    positive, negative = portrait_prompt(child, campaign(), allow_mature=True)
+    assert "undressed" not in positive and "nudity" in negative and "sexual content" in negative

@@ -445,6 +445,18 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
     </form>}
     {!!selected.aliases?.length && <div className="alias-row" aria-label="Also known as"><span>Also known as</span>
       {selected.aliases.map((alias) => <em key={alias.alias} title={alias.type.replaceAll("_", " ").toLowerCase()}>{alias.alias}</em>)}</div>}
+    {(() => {
+      const visual = (selected.attributes?.visual_identity ?? {}) as Record<string, unknown>;
+      const rows = ([["Age", visual.apparent_age], ["Build", visual.build], ["Face", visual.face], ["Eyes", visual.eyes],
+        ["Hair", visual.hair], ["Skin", visual.skin], ["Wearing", visual.clothing], ["Now", visual.current_state]] as Array<[string, unknown]>)
+        .filter(([, value]) => typeof value === "string" && value.trim());
+      const features = Array.isArray(visual.features) ? visual.features.filter((value): value is string => typeof value === "string") : [];
+      if (!rows.length && !features.length) return null;
+      return <div className="appearance-card"><h4>Appearance</h4>
+        <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{String(value)}</dd></div>)}</dl>
+        {features.length > 0 && <div className="appearance-marks">{features.map((feature) => <span key={feature}>{feature}</span>)}</div>}
+      </div>;
+    })()}
     <dl>{([
       ["Gender", selected.attributes?.gender], ["Pronouns", selected.attributes?.pronouns],
       ["First met", selected.attributes?.first_meeting_place], ["Faction", selected.attributes?.faction ?? selected.attributes?.faction_name],

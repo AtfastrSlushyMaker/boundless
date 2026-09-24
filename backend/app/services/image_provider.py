@@ -1,6 +1,7 @@
 """Provider-neutral portrait prompts, ComfyUI and AI Horde clients, and local storage."""
 
 import json
+import re
 import secrets
 from pathlib import Path
 from urllib.parse import urlparse
@@ -53,27 +54,34 @@ def importance_for(character) -> str:
     return "MINOR"
 
 
-def portrait_prompt(character, campaign) -> tuple[str, str]:
+def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple[str, str]:
+    from app.services.visual_identity import confirmed_adult, looks_minor
+
     attributes = character.attributes or {}
-    visual = attributes.get("visual_identity")
+    visual = attributes.get("visual_identity") if isinstance(attributes.get("visual_identity"), dict) else {}
     appearance = attributes.get("current_appearance") or attributes.get("appearance") or ""
     parts = [character.name, character.role]
-    if isinstance(visual, dict):
-        for key in ("species", "apparent_age", "hair", "eyes", "skin", "build"):
-            value = visual.get(key)
-            if isinstance(value, str) and value.strip():
-                parts.append(value.strip()[:120])
-        features = visual.get("features")
-        if isinstance(features, list):
-            parts.extend(str(feature)[:120] for feature in features[:5] if isinstance(feature, str))
-    for key in ("species", "apparent_age", "hair", "eyes", "skin", "build"):
-        value = attributes.get(key)
-        if isinstance(value, str) and value.strip() and not (isinstance(visual, dict) and visual.get(key)):
+    for key in ("species", "apparent_age", "gender_presentation", "build", "height", "skin", "face", "eyes", "hair"):
+        value = visual.get(key) or attributes.get(key)
+        if isinstance(value, str) and value.strip():
             parts.append(value.strip()[:120])
-    if isinstance(appearance, dict):
+    features = visual.get("features")
+    if isinstance(features, list):
+        parts.extend(str(feature)[:120] for feature in features[:6] if isinstance(feature, str))
+    if isinstance(visual.get("clothing"), str) and visual["clothing"].strip():
+        parts.append(visual["clothing"].strip()[:200])
+    state = str(visual.get("current_state") or "")
+    if re.search(r"\b(?:wound|blood|bruis|torn|wet|soaked|dirt|mud|bandage|scar|burn|ash|tired|pale|sweat)", state, re.IGNORECASE):
+        parts.append(state[:160])
+    detailed = sum(1 for key in ("build", "face", "eyes", "hair", "clothing") if visual.get(key)) >= 3
+    if isinstance(appearance, dict) and not detailed:
         parts.extend(str(value)[:150] for value in appearance.values() if isinstance(value, str))
-    elif isinstance(appearance, str):
+    elif isinstance(appearance, str) and not detailed:
         parts.append(appearance[:400])
+    minor = looks_minor(visual, character)
+    mature = allow_mature and not minor and confirmed_adult(visual, character)
+    if mature and isinstance(visual.get("body"), str) and visual["body"].strip():
+        parts.append(visual["body"].strip()[:300])
     faction = attributes.get("faction") or attributes.get("faction_name")
     if isinstance(faction, str):
         parts.append(f"of {faction[:100]}")
@@ -81,10 +89,20 @@ def portrait_prompt(character, campaign) -> tuple[str, str]:
     family = str(theme.get("family", "neutral"))
     style = ART_STYLES.get(family, "painterly fantasy portrait, natural directional light")
     accent = str(theme.get("accent_family", ""))[:60]
-    positive = ", ".join(part for part in parts if part)[:950]
-    positive = f"{style}, upper-body character portrait, detailed face, stable distinctive features, {positive}, {accent} accents, simple dark background, no lettering"
-    negative = "text, watermark, frame, blurry face, distorted anatomy, extra limbs, nudity, sexualized pose, gore"
-    return positive[:1400], negative
+    unique: list[str] = []
+    for part in (str(part).strip() for part in parts if part):
+        if part and not any(part.casefold() in kept.casefold() for kept in unique):
+            unique = [kept for kept in unique if kept.casefold() not in part.casefold()] + [part]
+    positive = ", ".join(unique)[:1100]
+    framing = "character portrait, detailed face" if mature else "upper-body character portrait, detailed face"
+    positive = f"{style}, {framing}, stable distinctive features, {positive}{f', {accent} accents' if accent else ''}, simple dark background, no lettering"
+    negative = "text, watermark, frame, blurry face, distorted anatomy, extra limbs, gore"
+    if not mature:
+        negative += ", nudity, nsfw, sexualized pose, suggestive"
+    if minor:
+        # Hard floor for anyone who may be under 18, whatever the settings say.
+        negative += ", revealing clothing, sexual content, adult body, cleavage, lingerie"
+    return positive[:1600], negative
 
 
 def stable_seed(character_id: UUID) -> int:

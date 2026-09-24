@@ -180,6 +180,7 @@ export type ImageSettings = {
   auto_major: boolean;
   auto_companion: boolean;
   auto_minor: boolean;
+  allow_mature: boolean;
 };
 
 export type ImageConnection = { status: "connected" | "offline"; detail?: string; device?: string; models: string[]; queue_running?: number; queue_pending?: number };

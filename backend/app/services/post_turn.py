@@ -151,12 +151,62 @@ async def _profile(session: AsyncSession, job: PostTurnJob, factory: Callable) -
             checkpoint.state_snapshot = snapshot
 
 
+async def _visuals(session: AsyncSession, job: PostTurnJob, factory: Callable) -> None:
+    """Give people who just appeared a visual identity the narration supports, before portraits queue."""
+    import re
+
+    from app.db.models import CharacterAlias, Turn
+    from app.services.context_builder import history_for_branch
+    from app.services.narration import clean_history_narration
+    from app.services.visual_identity import describe_character, merge_visual, needs_visual
+
+    campaign = await session.get(Campaign, job.campaign_id)
+    branch = await session.get(Branch, job.branch_id)
+    if not campaign or not branch or not branch.head_turn_id:
+        return
+    head = await session.get(Turn, branch.head_turn_id)
+    turns = await history_for_branch(session, branch.head_turn_id, limit=12)
+    people = (await session.scalars(select(Character).where(
+        Character.branch_id == branch.id, Character.visibility == "PLAYER_KNOWN"))).all()
+    player_key = normalize_reference(campaign.protagonist_name)
+    candidates = [person for person in people if normalize_reference(person.name) != player_key and needs_visual(person)
+                  and person.importance != "BACKGROUND" and head and person.last_seen_turn_index is not None
+                  and head.turn_index - person.last_seen_turn_index <= 1][:4]
+    if not candidates:
+        return
+    routed = await route(session, "state", factory)
+    tone = str((campaign.constitution or {}).get("tone") or (campaign.theme_profile or {}).get("family") or "")
+    for person in candidates:
+        names = [person.name, *(row.alias for row in (await session.scalars(select(CharacterAlias).where(
+            CharacterAlias.character_id == person.id))).all())]
+        excerpts = []
+        for turn in turns:
+            text = clean_history_narration(turn.gm_response or "")
+            for sentence in re.split(r"(?<=[.!?])\s+", text):
+                if any(name and name.casefold() in sentence.casefold() for name in names) or \
+                        (excerpts and len(excerpts[-1]) < 1600 and sentence.lower().startswith(("she ", "he ", "they ", "her ", "his "))):
+                    excerpts.append(sentence[:400])
+        if not excerpts:
+            continue
+        proposed = await describe_character(routed.provider, name=person.name, role=person.role or "",
+                                            facts=list((person.attributes or {}).get("known_facts") or []),
+                                            excerpts=excerpts[-12:], tone=tone)
+        attributes = dict(person.attributes or {})
+        attributes["visual_identity"] = merge_visual(attributes.get("visual_identity"), proposed)
+        if not attributes.get("appearance"):
+            visual = attributes["visual_identity"]
+            summary = ", ".join(str(visual[key]) for key in ("apparent_age", "build", "hair", "eyes", "clothing") if visual.get(key))
+            if summary:
+                attributes["appearance"] = summary[:600]
+        person.attributes = attributes
+
+
 async def _embeddings(session: AsyncSession, job: PostTurnJob, factory: Callable) -> None:
     await embed_missing(session, job.branch_id)
 
 
 HANDLERS = {"SUMMARY_UPDATE": _summary, "MEMORY_EMBEDDING": _embeddings, "PORTRAIT_QUEUE": _portraits,
-            "CONSTITUTION_EXTRACTION": _constitution, "PROFILE_EVOLUTION": _profile}
+            "CONSTITUTION_EXTRACTION": _constitution, "PROFILE_EVOLUTION": _profile, "VISUAL_PROFILE": _visuals}
 
 
 async def run_job(job_id: UUID, factory: Callable | None = None) -> str:

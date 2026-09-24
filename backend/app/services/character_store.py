@@ -43,7 +43,7 @@ IDENTITY_FIELDS = {"sex", "gender", "pronouns"}
 RESERVED_VALUE_KEYS = {
     "role", "personality", "status", "motivations", "attributes", "known_facts", "facts", "aliases", "alias",
     "name", "canonical_name", "title", "location", "character_id", "id", "previous_name", "injuries",
-    "conditions", "condition", "physical_status", "knowledge",
+    "conditions", "condition", "physical_status", "knowledge", "visual", "visual_identity",
 }
 
 
@@ -272,6 +272,10 @@ async def merge_character_values(session: AsyncSession, character: Character, va
             attributes["current_appearance"] = str(entry)[:1000]
             continue
         attributes[key] = _merge_attribute(attributes.get(key), entry)
+    visual = value.get("visual") if isinstance(value.get("visual"), dict) else value.get("visual_identity")
+    if isinstance(visual, dict):
+        from app.services.visual_identity import merge_visual
+        attributes["visual_identity"] = merge_visual(attributes.get("visual_identity"), visual)
     if isinstance(value.get("location"), str) and not is_unknown(value["location"]):
         attributes["location"] = value["location"][:160]
     character.attributes = attributes

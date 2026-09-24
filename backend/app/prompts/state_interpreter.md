@@ -11,8 +11,8 @@ IDENTITY RULES (most important)
 7. Keep it short: at most 8 state_changes, 3 events, 3 new_memories, and 3 knowledge_changes per turn. Skip trivia.
 
 OPERATIONS — each is {"kind":..., "character_id"?:..., "name"?:..., "value":{...}, "certainty":"CONFIRMED|OBSERVED|INFERRED|RUMOR|BELIEF", "visibility":"PLAYER_KNOWN|GM_ONLY"}
-- CREATE_CHARACTER: name, value {role, gender?, known_facts:[...], aliases?:[...]}
-- UPDATE_CHARACTER: character_id, value {role?, status?, location?, known_facts?:[new facts only], aliases?:[...]}
+- CREATE_CHARACTER: name, value {role, gender?, known_facts:[...], aliases?:[...], visual?:{apparent_age, build, face, hair, eyes, skin, clothing, features:[...]}} — fill visual from what the narration shows
+- UPDATE_CHARACTER: character_id, value {role?, status?, location?, known_facts?:[new facts only], aliases?:[...], visual?:{clothing?, current_state?}}
 - REVEAL_CHARACTER_IDENTITY: character_id, value {canonical_name, role?, aliases?:[...]}
 - MOVE_CHARACTER: character_id or name "player", value {location}
 - CHANGE_CHARACTER_STATUS: character_id or name "player", value {status, injuries?:[...]}

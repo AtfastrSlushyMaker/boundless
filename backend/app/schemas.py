@@ -84,6 +84,7 @@ class ImageSettingsUpdate(BaseModel):
     auto_major: bool = True
     auto_companion: bool = True
     auto_minor: bool = False
+    allow_mature: bool = False
 
     @model_validator(mode="after")
     def validate_provider(self):

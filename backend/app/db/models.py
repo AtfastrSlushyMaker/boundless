@@ -393,6 +393,8 @@ class ImageProfile(Base):
     auto_major: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_companion: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_minor: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Opt-in: mature detail in portraits of characters the story establishes as adults. Never for minors.
+    allow_mature: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 

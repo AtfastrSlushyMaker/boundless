@@ -16,6 +16,7 @@ import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useS
 import { AtlasArtwork } from "@/components/AtlasArtwork";
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
 import { CampaignHealth } from "@/components/CampaignHealth";
+import { GenerationProgress } from "@/components/GenerationProgress";
 import { ProfileList } from "@/components/LivingProfile";
 import { PeoplePanel } from "@/components/PeoplePanel";
 import { ChangeToasts, TurnChanges } from "@/components/TurnChanges";
@@ -610,12 +611,10 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
               {liveText && <motion.article className="story-turn story-turn--live" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
                 <div className="passage-head"><span>THE WORLD ANSWERS</span><span className="live-mark">{stage === "interpreting" ? "RECORDING" : "WRITING"}</span></div>
                 <div className="gm-prose"><Markdown content={liveText} /></div>
-                <AnimatePresence mode="wait">{stage === "interpreting"
-                  ? <motion.div key="record" className="stage-pill" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                      <span className="stage-dots" aria-hidden="true"><i /><i /><i /></span>Updating people, places, and objectives…</motion.div>
-                  : <motion.span key="caret" className="stream-caret" aria-hidden="true" exit={{ opacity: 0 }} />}</AnimatePresence>
+                {stage !== "interpreting" && <span className="stream-caret" aria-hidden="true" />}
               </motion.article>}
-              {generating && !liveText && <div className="generation-state"><span className="generation-orbit" aria-hidden="true">B</span><p>Finding what the world does next</p><button className="text-button" onClick={() => abortRef.current?.abort()}><StopCircle size={15} />Stop</button></div>}
+              <AnimatePresence>{generating && <GenerationProgress key="progress" stage={stage === "" ? "reading" : stage}
+                hasText={Boolean(liveText)} onStop={() => abortRef.current?.abort()} />}</AnimatePresence>
               {streamError && <div className="stream-error" role="alert"><CircleAlert size={16} /><p>{streamError}</p>{retryRequest && <button className="text-button" onClick={() => void runStream(retryRequest.action, retryRequest.instruction, retryRequest.targetTurnId)}>Try again</button>}</div>}
               {notice && <p className="notice-line notice-line--error" role="status">{notice}</p>}
             </div>

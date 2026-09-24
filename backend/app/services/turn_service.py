@@ -333,7 +333,7 @@ async def stream_turn(session: AsyncSession, campaign: Campaign, branch: Branch,
         session.add(Checkpoint(campaign_id=campaign.id, branch_id=branch.id, turn_id=turn.id,
                                turn_index=turn.turn_index, state_snapshot=await capture_snapshot(session, branch)))
         jobs = [enqueue(session, campaign_id=campaign.id, branch_id=branch.id, turn_id=turn.id, kind=kind)
-                for kind in ("MEMORY_EMBEDDING", "SUMMARY_UPDATE", "PROFILE_EVOLUTION", "PORTRAIT_QUEUE")]
+                for kind in ("MEMORY_EMBEDDING", "SUMMARY_UPDATE", "PROFILE_EVOLUTION", "VISUAL_PROFILE", "PORTRAIT_QUEUE")]
         await session.commit()
         yield {"type": "complete", "turn_id": str(turn.id), "turn_index": turn.turn_index,
                "branch_id": str(branch.id), "state_delta": turn.state_delta,

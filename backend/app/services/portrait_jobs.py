@@ -34,11 +34,12 @@ def profile_dict(profile: ImageProfile | None) -> dict:
         return {"provider": "none", "enabled": False, "base_url": "", "checkpoint": "",
                 "workflow": "boundless_portrait_v1", "width": 768, "height": 1024, "steps": 28,
                 "cfg": 6.5, "sampler": "dpmpp_2m", "scheduler": "karras",
-                "auto_recurring": True, "auto_major": True, "auto_companion": True, "auto_minor": False}
+                "auto_recurring": True, "auto_major": True, "auto_companion": True, "auto_minor": False,
+                "allow_mature": False}
     return {key: getattr(profile, key) for key in (
         "provider", "enabled", "base_url", "checkpoint", "workflow", "width", "height",
         "steps", "cfg", "sampler", "scheduler", "auto_recurring", "auto_major",
-        "auto_companion", "auto_minor")}
+        "auto_companion", "auto_minor", "allow_mature")}
 
 
 async def enqueue_portrait(session: AsyncSession, campaign: Campaign, character: Character,
@@ -53,7 +54,7 @@ async def enqueue_portrait(session: AsyncSession, campaign: Campaign, character:
         PortraitJob.status.in_(["QUEUED", "GENERATING"])).limit(1))
     if existing:
         return existing
-    positive, negative = portrait_prompt(character, campaign)
+    positive, negative = portrait_prompt(character, campaign, allow_mature=bool(getattr(profile, "allow_mature", False)))
     previous_seed = (character.attributes or {}).get("portrait_seed")
     from app.services.image_provider import new_seed
     seed = new_seed() if new_identity_seed else previous_seed if isinstance(previous_seed, int) else stable_seed(character.id)

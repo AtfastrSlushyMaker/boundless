@@ -7,7 +7,7 @@ import { api, ImageSettings } from "@/lib/api";
 const defaultSettings: ImageSettings = {
   provider: "none", enabled: false, base_url: "", checkpoint: "", workflow: "boundless_portrait_v1",
   width: 768, height: 1024, steps: 28, cfg: 6.5, sampler: "dpmpp_2m", scheduler: "karras",
-  auto_recurring: true, auto_major: true, auto_companion: true, auto_minor: false,
+  auto_recurring: true, auto_major: true, auto_companion: true, auto_minor: false, allow_mature: false,
 };
 
 export function ImageSettingsPanel() {
@@ -53,6 +53,10 @@ export function ImageSettingsPanel() {
       {(form.provider === "comfyui" || form.provider === "ai_horde") && <fieldset className="image-auto-options"><legend>Automatic portraits after story turns</legend>
         {([ ["auto_companion", "Companions"], ["auto_major", "Major characters"], ["auto_recurring", "Recurring characters"], ["auto_minor", "Minor characters"] ] as const).map(([key, label]) => <label key={key}><input type="checkbox" checked={form[key]} onChange={(event) => update({ [key]: event.target.checked })} /><span>{label}</span></label>)}
         <p>Background people are always manual. Automatic generation runs after the story is saved.</p>
+      </fieldset>}
+      {form.provider !== "none" && <fieldset className="image-auto-options"><legend>Mature content</legend>
+        <label><input type="checkbox" checked={Boolean(form.allow_mature)} onChange={(event) => update({ allow_mature: event.target.checked })} /><span>Allow mature detail in portraits of adults</span></label>
+        <p>Only for characters the story clearly establishes as adults, and only what the narration shows. Anyone who is or might be under 18 always gets a fully clothed, non-suggestive portrait.</p>
       </fieldset>}
       {message && <p className="form-message" role="status">{message}</p>}
     </div>
