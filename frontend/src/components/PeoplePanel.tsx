@@ -3,9 +3,10 @@
 import Image from "next/image";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { FormEvent, PointerEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { faceCrop, PortraitButton } from "@/components/PortraitLightbox";
+import { EdgeStyle, RelationshipGraph } from "@/components/RelationshipGraph";
 import { api, portraitUrl } from "@/lib/api";
 import type { CampaignDetail, Character, Importance, Relationship, RelationshipEvent } from "@/lib/api";
 
@@ -24,8 +25,6 @@ type ProfileDraft = { role: string; personality: string; appearance: string; sex
 type CoreAxis = "trust" | "respect" | "fear" | "hostility";
 type RelationDraft = Record<CoreAxis, string> & { status: string; summary: string };
 
-const MIN_WIDTH = 700;
-const MIN_HEIGHT = 560;
 const CORE_AXES: Axis[] = ["trust", "respect", "fear", "hostility"];
 const AXES: Axis[] = ["trust", "respect", "fear", "hostility", "affection", "loyalty", "attraction", "debt", "dependence"];
 const AXIS_LABELS: Record<Axis, string> = { trust: "Trust", respect: "Respect", fear: "Fear", hostility: "Hostility",
@@ -171,7 +170,6 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
   const [peopleFilter, setPeopleFilter] = useState<PeopleFilter>("all");
   const [relationshipFilter, setRelationshipFilter] = useState<RelationshipFilter>("all");
   const [search, setSearch] = useState("");
-  const [zoom, setZoom] = useState(1);
   const [showBackground, setShowBackground] = useState(false);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [showAllFacts, setShowAllFacts] = useState(false);
@@ -185,7 +183,6 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
   const [saving, setSaving] = useState(false);
   const [profileDraft, setProfileDraft] = useState<ProfileDraft>({ role: "", personality: "", appearance: "", sex: "", gender: "", pronouns: "" });
   const [relationDraft, setRelationDraft] = useState<RelationDraft>({ trust: "", respect: "", fear: "", hostility: "", status: "", summary: "" });
-  const graphScrollRef = useRef<HTMLDivElement>(null);
   const choosePerson = (id: string) => { setSelectedId(id); setSelectedEdgeId(null); setShowAllFacts(false); setEditing(null); setAvatarError(""); };
 
   const protagonist = campaign.characters.find((person) => person.name === campaign.protagonist_name);
@@ -215,7 +212,6 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
   const selectedEdge = campaign.relationships.find((relation) => relation.id === selectedEdgeId);
   const selectedRelation = socialRelation(selected, campaign.protagonist_name, campaign.relationships);
   const focused = selectedId !== null && selected?.id === selectedId;
-  const connectedNames = new Set(focused && selected ? [selected.name, ...connections.flatMap((relation) => [relation.from, relation.to])] : []);
   const presentAxes = AXES.filter((axis) => !CORE_AXES.includes(axis) && campaign.relationships.some((relation) => score(relation, axis) !== null));
   const lastInteraction = selectedRelation?.dimensions?.last_interaction;
   const knownFacts = selected ? factsFor(selected) : [];
@@ -323,193 +319,19 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
     finally { setRequestingAvatar(false); }
   };
 
-  const degree = (person: Character) => relationships.filter((relation) => relation.from === person.name || relation.to === person.name).length;
-  const otherGraphPeople = graphPeople.filter((person) => person.name !== campaign.protagonist_name)
-    .sort((left, right) => IMPORTANCE_ORDER.indexOf(importanceOf(left)) - IMPORTANCE_ORDER.indexOf(importanceOf(right)) || degree(right) - degree(left));
-  const rings: Character[][] = [];
-  let nextPerson = 0;
-  for (let ring = 0; nextPerson < otherGraphPeople.length; ring += 1) {
-    const capacity = 8 + ring * 6;
-    rings.push(otherGraphPeople.slice(nextPerson, nextPerson + capacity));
-    nextPerson += capacity;
-  }
-  const outerRadius = rings.length ? 215 + (rings.length - 1) * 185 : 215;
-  const graphWidth = Math.max(MIN_WIDTH, (outerRadius + 130) * 2);
-  const graphHeight = Math.max(MIN_HEIGHT, (outerRadius + 115) * 2);
-  const positions = new Map<string, { x: number; y: number }>();
-  if (protagonist && graphPeople.some((person) => person.name === campaign.protagonist_name)) {
-    positions.set(protagonist.name, { x: graphWidth / 2, y: graphHeight / 2 });
-  }
-  rings.forEach((peopleOnRing, ring) => {
-    const radius = 215 + ring * 185;
-    peopleOnRing.forEach((person, index) => {
-      const angle = -Math.PI / 2 + index * (2 * Math.PI / peopleOnRing.length) + ring * 0.12;
-      positions.set(person.name, { x: graphWidth / 2 + Math.cos(angle) * radius, y: graphHeight / 2 + Math.sin(angle) * radius });
-    });
-  });
-
   useEffect(() => {
     if (view !== "graph") return;
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setView("list"); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [view]);
-
-  // ── Camera: a transform (pan + zoom) over a fixed-size world, driven by native listeners
-  // so trackpad pinch and two-finger pans never fall through to the page.
-  const layoutKey = `boundless:graph-layout:${campaign.id}:${campaign.branch.id}`;
-  const [overrides, setOverrides] = useState<Record<string, { x: number; y: number }>>({});
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(layoutKey);
-      const parsed = saved ? JSON.parse(saved) : {};
-      const timer = window.setTimeout(() => setOverrides(parsed && typeof parsed === "object" ? parsed : {}), 0);
-      return () => window.clearTimeout(timer);
-    } catch { return undefined; }
-  }, [layoutKey]);
-  graphPeople.forEach((person) => {
-    const moved = overrides[person.id];
-    if (moved && positions.has(person.name)) positions.set(person.name, moved);
-  });
-  const cameraRef = useRef({ x: 0, y: 0, k: 1 });
-  const frameRef = useRef(0);
-  const applyCamera = () => {
-    cancelAnimationFrame(frameRef.current);
-    frameRef.current = requestAnimationFrame(() => {
-      const { x, y, k } = cameraRef.current;
-      const viewport = graphScrollRef.current;
-      const world = viewport?.querySelector<HTMLDivElement>(".people-graph-world");
-      if (world) world.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${k})`;
-      if (viewport) {
-        viewport.style.setProperty("--art-size", `${Math.round(2600 * k)}px`);
-        viewport.style.setProperty("--art-x", `${Math.round(x * 0.35)}px`);
-        viewport.style.setProperty("--art-y", `${Math.round(y * 0.35)}px`);
-      }
-      setZoom((current) => Math.abs(current - k) > 0.004 ? k : current);
-    });
-  };
-  const zoomAt = (next: number, clientX?: number, clientY?: number) => {
-    const viewport = graphScrollRef.current;
-    if (!viewport) return;
-    const camera = cameraRef.current;
-    const k = Math.max(0.3, Math.min(2.4, next));
-    const rect = viewport.getBoundingClientRect();
-    const px = clientX === undefined ? rect.width / 2 : clientX - rect.left;
-    const py = clientY === undefined ? rect.height / 2 : clientY - rect.top;
-    camera.x = px - ((px - camera.x) / camera.k) * k;
-    camera.y = py - ((py - camera.y) / camera.k) * k;
-    camera.k = k;
-    applyCamera();
-  };
-  const fitView = (animate = true) => {
-    const viewport = graphScrollRef.current;
-    if (!viewport) return;
-    const points = [...positions.values()];
-    if (!points.length) return;
-    const minX = Math.min(...points.map((point) => point.x)) - 110, maxX = Math.max(...points.map((point) => point.x)) + 110;
-    const minY = Math.min(...points.map((point) => point.y)) - 90, maxY = Math.max(...points.map((point) => point.y)) + 90;
-    const rect = viewport.getBoundingClientRect();
-    const k = Math.max(0.3, Math.min(1.2, rect.width / (maxX - minX), rect.height / (maxY - minY)));
-    const world = viewport.querySelector<HTMLDivElement>(".people-graph-world");
-    if (world) world.classList.toggle("is-gliding", animate && !reduceMotion);
-    cameraRef.current = { k, x: rect.width / 2 - ((minX + maxX) / 2) * k, y: rect.height / 2 - ((minY + maxY) / 2) * k };
-    applyCamera();
-    if (world) window.setTimeout(() => world.classList.remove("is-gliding"), 420);
-  };
-  useEffect(() => {
-    if (view !== "graph") return;
-    const timer = window.setTimeout(() => fitView(false), 30);
-    return () => window.clearTimeout(timer);
-    // Fit once when the graph opens; later layout changes keep the player's camera.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view]);
-  useEffect(() => {
-    const viewport = graphScrollRef.current;
-    if (view !== "graph" || !viewport) return;
-    const onWheel = (event: globalThis.WheelEvent) => {
-      event.preventDefault();
-      const camera = cameraRef.current;
-      const pixelDelta = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
-      const mouseWheel = event.deltaMode !== 0 || (Math.abs(event.deltaY) >= 40 && event.deltaX === 0 && Number.isInteger(event.deltaY));
-      if (event.ctrlKey || event.metaKey) {
-        zoomAt(camera.k * Math.exp(-event.deltaY * pixelDelta * 0.0105), event.clientX, event.clientY);
-      } else if (mouseWheel) {
-        zoomAt(camera.k * Math.exp(-Math.sign(event.deltaY) * 0.16), event.clientX, event.clientY);
-      } else {
-        camera.x -= event.deltaX * pixelDelta;
-        camera.y -= event.deltaY * pixelDelta;
-        applyCamera();
-      }
-    };
-    // Safari trackpad pinch arrives as gesture events rather than ctrl+wheel.
-    let gestureStart = 1;
-    const onGestureStart = (event: Event) => { event.preventDefault(); gestureStart = cameraRef.current.k; };
-    const onGestureChange = (event: Event) => {
-      event.preventDefault();
-      const gesture = event as Event & { scale: number; clientX: number; clientY: number };
-      zoomAt(gestureStart * gesture.scale, gesture.clientX, gesture.clientY);
-    };
-    viewport.addEventListener("wheel", onWheel, { passive: false });
-    viewport.addEventListener("gesturestart", onGestureStart);
-    viewport.addEventListener("gesturechange", onGestureChange);
-    return () => {
-      viewport.removeEventListener("wheel", onWheel);
-      viewport.removeEventListener("gesturestart", onGestureStart);
-      viewport.removeEventListener("gesturechange", onGestureChange);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view]);
-
-  const dragRef = useRef<{ pointerId: number; x: number; y: number; nodeId?: string; startX: number; startY: number; moved: boolean } | null>(null);
-  const suppressClickRef = useRef(false);
-  const startPan = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 && event.button !== 1) return;
-    const node = (event.target as Element).closest<HTMLElement>("[data-node-id]");
-    if (!node && (event.target as Element).closest("button, input, select, a, path.edge-hit")) return;
-    const nodeId = node?.dataset.nodeId;
-    const person = nodeId ? graphPeople.find((row) => row.id === nodeId) : undefined;
-    const origin = person ? positions.get(person.name) : undefined;
-    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, nodeId,
-      startX: origin?.x ?? cameraRef.current.x, startY: origin?.y ?? cameraRef.current.y, moved: false };
-    graphScrollRef.current?.setPointerCapture(event.pointerId);
-  };
-  const movePan = (event: PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
-    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
-    drag.moved = true;
-    graphScrollRef.current?.classList.add(drag.nodeId ? "is-dragging-node" : "is-panning");
-    if (drag.nodeId) {
-      const k = cameraRef.current.k;
-      const nodeId = drag.nodeId;
-      setOverrides((current) => ({ ...current, [nodeId]: { x: drag.startX + dx / k, y: drag.startY + dy / k } }));
-    } else {
-      cameraRef.current.x = drag.startX + dx;
-      cameraRef.current.y = drag.startY + dy;
-      applyCamera();
-    }
-  };
-  const stopPan = (event: PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    const viewport = graphScrollRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    dragRef.current = null;
-    viewport?.classList.remove("is-panning", "is-dragging-node");
-    if (viewport?.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
-    if (drag.moved) {
-      suppressClickRef.current = true;
-      window.setTimeout(() => { suppressClickRef.current = false; }, 0);
-      if (drag.nodeId) setOverrides((current) => {
-        try { window.localStorage.setItem(layoutKey, JSON.stringify(current)); } catch { /* layout is a convenience */ }
-        return current;
-      });
-    }
-  };
-  const resetLayout = () => {
-    setOverrides({});
-    try { window.localStorage.removeItem(layoutKey); } catch { /* ignore */ }
-    window.setTimeout(() => fitView(), 30);
+  const layoutKey = `boundless:graph-positions:${campaign.id}:${campaign.branch.id}`;
+  const edgeStyle = (relation: Relationship): EdgeStyle => {
+    const axis = relationshipFilter !== "all" && relationshipFilter !== "kinship" ? relationshipFilter : edgeAxis(relation);
+    const label = axis && score(relation, axis) !== null ? `${AXIS_LABELS[axis]} ${score(relation, axis)}`
+      : typeof relation.dimensions?.kinship === "string" ? relation.dimensions.kinship
+        : relation.dimensions?.awareness ? "" : displayRelationType(relation);
+    return { axis, label, width: axis ? 1 + ((score(relation, axis) ?? 0) / 100) * 2.2 : 1.1 };
   };
 
   const detail = selected && <section className="person-detail" aria-live="polite">
@@ -517,16 +339,15 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
       {avatarUrl ? <PortraitButton className={`person-portrait${faceCrop(selected.attributes).className}`} style={faceCrop(selected.attributes).style} src={avatarUrl} name={selected.name} caption={selected.role}>
         <Image src={avatarUrl} alt="" width={68} height={68} unoptimized /></PortraitButton>
         : <div className="person-portrait" aria-label={`No portrait for ${selected.name}`}><span aria-hidden="true">{selected.name.charAt(0).toLocaleUpperCase()}</span></div>}<div><p className="person-detail-role">{selected.role || "Role unknown"}</p><h3>{selected.name}</h3>
-        {selected.name !== campaign.protagonist_name && <span className={`importance-badge importance-badge--${importanceOf(selected).toLowerCase()}`}>{IMPORTANCE_LABEL[importanceOf(selected)]}</span>}</div></div>
-      {selected.status && selected.status !== "alive" && <span className="person-status">{selected.status}</span>}</div>
+        {selected.name !== campaign.protagonist_name && <span className={`importance-badge importance-badge--${importanceOf(selected).toLowerCase()}`}>{IMPORTANCE_LABEL[importanceOf(selected)]}</span>}
+        {selected.status && selected.status !== "alive" && <p className="person-status">{selected.status}</p>}</div></div></div>
     <div className="portrait-controls">
-      {(imageProvider === "comfyui" || imageProvider === "ai_horde") && <button type="button" className="portrait-action" onClick={() => void generateAvatar()} disabled={requestingAvatar || Boolean(pendingAvatarJob)}>{requestingAvatar ? "Requesting…" : pendingAvatarJob ? "Portrait generating…" : avatarUrl ? "Regenerate portrait" : "Generate portrait"}</button>}
-      {avatarUrl && (imageProvider === "comfyui" || imageProvider === "ai_horde") && <button type="button" className="portrait-action" onClick={() => void generateAvatar(true)} disabled={requestingAvatar || Boolean(pendingAvatarJob)}>New seed</button>}
+      {(imageProvider === "comfyui" || imageProvider === "ai_horde") && <button type="button" className="portrait-action" onClick={() => void generateAvatar(Boolean(avatarUrl))} disabled={requestingAvatar || Boolean(pendingAvatarJob)}>{requestingAvatar ? "Requesting…" : pendingAvatarJob ? "Portrait generating…" : avatarUrl ? "Regenerate portrait" : "Generate portrait"}</button>}
       <button type="button" className="portrait-action" onClick={() => avatarInputRef.current?.click()} disabled={requestingAvatar}>Change / upload</button>
       {avatarUrl && <button type="button" className="portrait-action" onClick={() => void removeAvatar()} disabled={requestingAvatar}>Remove</button>}
       <input ref={avatarInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="visually-hidden" aria-label={`Upload portrait for ${selected.name}`} onChange={(event) => void uploadAvatar(event.target.files?.[0])} />
     </div>
-    <p className="portrait-note">{pendingAvatarJob ? "Portrait queued. The story continues while it generates." : imageProvider === "comfyui" ? avatarUrl ? "Portrait saved in Boundless. Regenerate it or choose a new seed at any time." : "Generate a portrait on your configured ComfyUI server." : imageProvider === "ai_horde" ? "Sends character appearance to AI Horde. The image is copied into Boundless storage." : imageProvider === "perchance_assisted" ? "Generate in Perchance, then upload the saved image here." : "Enable a portrait provider in Settings, or upload an image directly."}</p>
+    <p className="portrait-note">{pendingAvatarJob ? "Portrait queued. The story continues while it generates." : imageProvider === "comfyui" ? avatarUrl ? "Portrait saved in Boundless. Regenerate for a new take on the same look." : "Generate a portrait on your configured ComfyUI server." : imageProvider === "ai_horde" ? "Sends character appearance to AI Horde. The image is copied into Boundless storage." : imageProvider === "perchance_assisted" ? "Generate in Perchance, then upload the saved image here." : "Enable a portrait provider in Settings, or upload an image directly."}</p>
     {avatarError && <p className="portrait-error" role="alert">{avatarError}</p>}
     <button type="button" className="person-edit-action" onClick={editProfile}>Edit character details</button>
     {editing === "profile" && <form className="person-edit-form" onSubmit={(event) => void saveEdit(event)}>
@@ -662,62 +483,12 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
                 {presentAxes.map((axis) => <option key={axis} value={axis}>{AXIS_LABELS[axis]}</option>)}
               </select>
               {backgroundCount > 0 && <label className="background-toggle"><input type="checkbox" checked={showBackground} onChange={(event) => setShowBackground(event.target.checked)} />Background ({backgroundCount})</label>}
-              <span className="people-graph-spacer" />
-              <button type="button" aria-label="Zoom out" disabled={zoom <= 0.3} onClick={() => zoomAt(cameraRef.current.k / 1.2)}>−</button>
-              <span aria-live="polite">{Math.round(zoom * 100)}%</span>
-              <button type="button" aria-label="Zoom in" disabled={zoom >= 2.4} onClick={() => zoomAt(cameraRef.current.k * 1.2)}>+</button>
-              <button type="button" onClick={() => fitView()}>Fit</button>
-              {Object.keys(overrides).length > 0 && <button type="button" onClick={resetLayout}>Reset layout</button>}
             </div>
-            <div className="people-graph-viewport" ref={graphScrollRef} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={stopPan} onPointerCancel={stopPan}
-              onClickCapture={(event) => { if (suppressClickRef.current) { event.stopPropagation(); event.preventDefault(); } }}>
-              <div className="people-graph-world" style={{ width: graphWidth, height: graphHeight }}>
-              <div className="people-graph" role="group" aria-label={`Character relationship graph with ${graphPeople.length} people and ${relationships.length} connections`} style={{ width: graphWidth, height: graphHeight }}>
-                <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} aria-hidden="true">
-                  <defs><marker id="edge-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor" /></marker></defs>
-                  {relationships.map((relation, edgeIndex) => {
-                    const from = positions.get(relation.from); const to = positions.get(relation.to);
-                    if (!from || !to) return null;
-                    const active = selected?.name === relation.from || selected?.name === relation.to || selectedEdgeId === relation.id;
-                    const dim = focused && !active;
-                    const axis = relationshipFilter !== "all" && relationshipFilter !== "kinship" ? relationshipFilter : edgeAxis(relation);
-                    const label = axis && score(relation, axis) !== null ? `${AXIS_LABELS[axis]} ${score(relation, axis)}`
-                      : relation.dimensions?.kinship || relation.dimensions?.awareness ? "" : displayRelationType(relation);
-                    const midpointX = (from.x + to.x) / 2;
-                    const midpointY = (from.y + to.y) / 2;
-                    const curve = from.y <= to.y ? -18 : 18;
-                    // Stop the arrow at the node's edge so direction stays readable.
-                    const length = Math.hypot(to.x - from.x, to.y - from.y) || 1;
-                    const endX = to.x - ((to.x - from.x) / length) * 70;
-                    const endY = to.y - ((to.y - from.y) / length) * 56;
-                    const d = `M ${from.x} ${from.y} Q ${midpointX} ${midpointY + curve} ${endX} ${endY}`;
-                    const width = axis ? 1.2 + ((score(relation, axis) ?? 0) / 100) * 2.4 : 1.4;
-                    return <g key={relation.id} className={`people-edge-group${active ? " is-active" : ""}${dim ? " is-dim" : ""}${selectedEdgeId === relation.id ? " is-selected" : ""}`} data-axis={axis ?? "known"}>
-                      <motion.path d={d} markerEnd="url(#edge-arrow)" style={{ strokeWidth: width }}
-                        initial={reduceMotion ? false : { pathLength: 0, opacity: 0 }} animate={{ pathLength: 1, opacity: 1 }}
-                        transition={{ duration: 0.7, delay: Math.min(edgeIndex * 0.03, 0.6), ease: "easeOut" }} />
-                      <path d={d} className="edge-hit" onClick={() => { setSelectedEdgeId(relation.id); }} />
-                      {label && <text x={midpointX} y={midpointY + curve - 4}>{label}</text>}
-                    </g>;
-                  })}
-                </svg>
-                {graphPeople.map((person, nodeIndex) => {
-                  const position = positions.get(person.name);
-                  if (!position) return null;
-                  const dimmed = focused && !connectedNames.has(person.name) && person.name !== campaign.protagonist_name;
-                  return <motion.button type="button" key={person.id} data-node-id={person.id} className={`people-node${dimmed ? " is-dim" : ""}${overrides[person.id] ? " is-placed" : ""}`}
-                    data-player={person.name === campaign.protagonist_name} data-importance={importanceOf(person).toLowerCase()} aria-pressed={selected?.id === person.id}
-                    style={{ left: position.x, top: position.y, x: "-50%", y: "-50%" }} onClick={() => choosePerson(person.id)}
-                    initial={reduceMotion ? false : { opacity: 0, scale: 0.8 }} animate={{ opacity: dimmed ? 0.42 : 1, scale: 1 }}
-                    whileHover={reduceMotion ? undefined : { scale: 1.04 }}
-                    transition={{ type: "spring", stiffness: 320, damping: 26, delay: reduceMotion ? 0 : Math.min(nodeIndex * 0.025, 0.5) }}>
-                    <span className={`people-node-portrait${faceCrop(person.attributes).className}`} style={faceCrop(person.attributes).style} aria-hidden="true">{portraitUrl(person.attributes?.avatar_url) ? <Image src={portraitUrl(person.attributes?.avatar_url)} alt="" width={46} height={46} unoptimized /> : person.name.charAt(0).toLocaleUpperCase()}</span>
-                    <strong>{person.name}</strong><span>{person.role || (person.name === campaign.protagonist_name ? "Player character" : "Role unknown")}</span>
-                  </motion.button>;
-                })}
-              </div>
-            </div></div>
-            <p className="people-graph-note">{graphPeople.length} people · {relationships.length} connections{!showBackground && backgroundCount ? ` · ${backgroundCount} background hidden` : ""}. Drag people to arrange them · pinch or ⌘-scroll to zoom · two-finger scroll to move · click a line for its history.</p>
+            <RelationshipGraph people={graphPeople} relationships={relationships} protagonistName={campaign.protagonist_name}
+              selectedId={focused ? selected?.id ?? null : null} selectedEdgeId={selectedEdgeId} importanceOf={importanceOf}
+              edgeStyle={edgeStyle} onSelectPerson={choosePerson} onSelectEdge={setSelectedEdgeId} layoutKey={layoutKey}
+              reduceMotion={Boolean(reduceMotion)} />
+            <p className="people-graph-note">{graphPeople.length} people · {relationships.length} connections{!showBackground && backgroundCount ? ` · ${backgroundCount} background hidden` : ""}. Drag anyone and their connections follow · hover to trace a web · pinch or ⌘-scroll to zoom · click a line for its history.</p>
           </main>
           <aside className="people-inspector" aria-label="Selected person details">
             <AnimatePresence mode="wait" initial={false}>

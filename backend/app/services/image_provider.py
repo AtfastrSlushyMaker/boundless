@@ -191,7 +191,7 @@ class ComfyUIImageProvider:
                 return None
             status = entry.get("status", {})
             if status.get("status_str") == "error" or status.get("completed") is False:
-                raise ValueError("ComfyUI reported a failed portrait workflow.")
+                raise ValueError(comfy_error(status))
             outputs = entry.get("outputs", {})
             images = outputs.get("7", {}).get("images", []) if isinstance(outputs, dict) else []
             if not images:
@@ -202,6 +202,19 @@ class ComfyUIImageProvider:
             async with client.stream("GET", f"{self.base_url}/view", params={key: image[key] for key in ("filename", "subfolder", "type")}) as result:
                 result.raise_for_status()
                 return await limited_image(result)
+
+
+def comfy_error(status: dict) -> str:
+    """The node and message ComfyUI reported, so the player can see why a portrait failed."""
+    for message in status.get("messages") or []:
+        if isinstance(message, list) and len(message) == 2 and message[0] == "execution_error" and isinstance(message[1], dict):
+            detail = message[1]
+            text = str(detail.get("exception_message") or "").strip().splitlines()
+            node = detail.get("node_type") or "a node"
+            hint = " The checkpoint file looks corrupt or incomplete; re-download it or pick another in Settings." \
+                if node == "CheckpointLoaderSimple" else ""
+            return f"ComfyUI failed in {node}: {text[0][:200] if text else 'unknown error'}.{hint}"
+    return "ComfyUI reported a failed portrait workflow."
 
 
 async def request_horde(positive: str) -> str:

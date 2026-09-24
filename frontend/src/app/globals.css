@@ -326,6 +326,12 @@
 .role-row>select{min-height:36px;background:#101a14;color:#e6e9dc;border:1px solid #53614d;border-radius:3px;padding:0 8px;font-size:12px}
 .role-row>div:last-child:not(:first-child){grid-column:1/-1}
 .role-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;padding:8px 0 2px}
+.role-model-field{grid-column:1/-1}
+.role-model-control{display:flex;gap:6px;align-items:stretch}
+.role-model-control>select,.role-model-control>input{flex:1;min-width:0}
+.role-model-refresh{flex:none;display:grid;place-items:center;width:36px;min-height:36px;border:1px solid #53614d;border-radius:3px;background:#101a14;color:#cbd7c3;cursor:pointer}
+.role-model-refresh:hover:not(:disabled){border-color:#c6b589;color:#f1e7c8}.role-model-refresh:disabled{opacity:.6;cursor:default}
+.role-model-status{color:#9aa895;font-size:11px;line-height:1.4}
 .role-chip{justify-self:start;padding:5px 10px;border:1px solid #53614d;border-radius:999px;color:#cbd7c3;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px}
 .role-switch{display:flex!important;align-items:center;gap:8px;grid-template-columns:none!important}
 .role-switch input{width:34px!important;height:18px!important;min-height:18px!important;accent-color:#c6b589}
@@ -584,3 +590,48 @@ body:has(.game-shell){background:var(--deep,#0b0f0d)}
 .game-shell,.game-body,.campaign-rail,.story-workspace{overflow:clip}
 .rail-content,.person-detail{position:relative}
 .people-graph-tools button{white-space:nowrap}
+/* Live relationship graph (force-directed, Obsidian-style). */
+.graph-canvas{position:relative;min-width:0;min-height:420px;display:grid}
+.graph-canvas>.people-graph-viewport{grid-area:1/1;min-height:420px}
+.graph-live .people-graph-world{width:0;height:0;overflow:visible}
+.graph-edges{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none}
+.graph-edge{color:#7c8779;transition:opacity .25s ease}
+.graph-edge line{stroke:currentColor;stroke-linecap:round;opacity:.55;transition:opacity .25s ease,stroke-width .25s ease}
+.graph-edge .graph-edge-hit{stroke:transparent;stroke-width:14px;opacity:1;pointer-events:stroke;cursor:pointer}
+.graph-edge.is-active line:not(.graph-edge-hit){opacity:1;filter:drop-shadow(0 0 3px color-mix(in srgb,currentColor 60%,transparent))}
+.graph-edge.is-selected line:not(.graph-edge-hit){opacity:1;filter:drop-shadow(0 0 5px currentColor)}
+.graph-edge.is-dim{opacity:.3}.is-hovering .graph-edge.is-dim{opacity:.12}
+.graph-edge text{fill:var(--ink);font:11px/1 var(--sans);text-anchor:middle;paint-order:stroke;stroke:var(--deep);stroke-width:4px;stroke-linejoin:round;pointer-events:none}
+.graph-edge[data-axis=trust]{color:#91b27f}.graph-edge[data-axis=respect]{color:#c5ae79}.graph-edge[data-axis=fear]{color:#c17f72}
+.graph-edge[data-axis=hostility]{color:#cf6f63}.graph-edge[data-axis=affection]{color:#d69ab0}.graph-edge[data-axis=loyalty]{color:#8fb0c6}
+.graph-edge[data-axis=attraction]{color:#c88fc2}.graph-edge[data-axis=debt]{color:#b9a46b}.graph-edge[data-axis=dependence]{color:#9aa5b8}
+.graph-node{position:absolute;left:0;top:0;width:0;height:0;padding:0;border:0;background:none;color:var(--ink);cursor:grab;will-change:transform;transition:opacity .25s ease}
+.graph-node-dot{position:absolute;left:calc(var(--r) * -1);top:calc(var(--r) * -1);display:grid;place-items:center;width:calc(var(--r) * 2);height:calc(var(--r) * 2);overflow:hidden;border-radius:50%;
+  border:1.5px solid color-mix(in srgb,var(--gold) 55%,var(--line));background:color-mix(in srgb,var(--deep) 80%,#2c352b);color:var(--gold);font:normal calc(var(--r) * .9)/1 var(--serif);
+  box-shadow:0 2px 10px #0008;transition:transform .2s cubic-bezier(.22,1,.36,1),border-color .2s ease,box-shadow .2s ease}
+.graph-node-dot img{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none;-webkit-user-drag:none}
+.graph-node[data-player=true] .graph-node-dot{border-color:var(--gold);border-width:2px;box-shadow:0 0 0 4px color-mix(in srgb,var(--gold) 18%,transparent),0 2px 14px #000a}
+.graph-node[data-importance=background] .graph-node-dot{opacity:.8}
+.graph-node:hover .graph-node-dot,.graph-node.is-focus .graph-node-dot{transform:scale(1.12);border-color:var(--gold);box-shadow:0 0 0 3px color-mix(in srgb,var(--gold) 35%,transparent),0 0 22px color-mix(in srgb,var(--gold) 30%,transparent)}
+.graph-node[aria-pressed=true] .graph-node-dot{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold),0 0 24px color-mix(in srgb,var(--gold) 40%,transparent)}
+.graph-node:focus-visible{outline:none}.graph-node:focus-visible .graph-node-dot{outline:2px solid var(--gold);outline-offset:3px}
+.graph-node-label{position:absolute;left:-90px;width:180px;top:calc(var(--r) + 6px);display:grid;gap:1px;text-align:center;pointer-events:none;transition:opacity .25s ease}
+.graph-node-label strong{font:normal 13px/1.15 var(--serif);color:var(--ink);text-shadow:0 1px 3px #000,0 0 8px #000c}
+.graph-node-label small{color:var(--muted);font-size:10px;line-height:1.2;opacity:0;transition:opacity .2s ease;text-shadow:0 1px 3px #000}
+.graph-node:hover .graph-node-label small,.graph-node.is-focus .graph-node-label small{opacity:1}
+.graph-node.is-dim{opacity:.5}.is-hovering .graph-node.is-dim{opacity:.22}
+.is-far .graph-node:not(.is-focus):not(:hover):not([data-player=true]) .graph-node-label{opacity:0}
+.is-dragging-node .graph-node-dot{transition:border-color .2s ease,box-shadow .2s ease}
+.graph-controls{position:absolute;right:12px;bottom:12px;z-index:3;display:flex;align-items:center;gap:2px;padding:4px;border:1px solid var(--line);border-radius:999px;
+  background:color-mix(in srgb,var(--deep) 82%,transparent);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);box-shadow:0 6px 20px #0006}
+.graph-controls button{display:grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--ink);cursor:pointer}
+.graph-controls button:hover:not(:disabled){background:color-mix(in srgb,var(--gold) 16%,transparent);color:var(--gold)}
+.graph-controls button:disabled{opacity:.35;cursor:default}
+.graph-controls span{min-width:42px;text-align:center;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+@media(prefers-reduced-motion:reduce){.graph-node-dot,.graph-edge,.graph-edge line,.graph-node{transition:none}}
+/* Person header: long roles and statuses wrap under the name instead of squeezing it. */
+.person-identity{flex:1;align-items:flex-start}
+.person-identity>div:last-child{flex:1;min-width:0}
+.person-identity>.person-portrait{margin-top:2px}
+.person-detail-head h3{overflow-wrap:normal;word-break:normal;hyphens:manual}
+.person-status{margin:6px 0 0;color:var(--quiet);font-size:11px;line-height:1.4;overflow-wrap:anywhere}

@@ -265,3 +265,15 @@ def test_player_appearance_text_is_used_but_never_sexualizes_minors():
     child = character(appearance="small boy, naked, muddy knees", visual_identity={"apparent_age": "about 10"})
     positive, negative = portrait_prompt(child, campaign(), allow_mature=True)
     assert "naked" not in positive and "muddy knees" in positive and "nudity" in negative
+
+
+def test_comfy_error_names_the_failing_node():
+    from app.services.image_provider import comfy_error
+
+    status = {"status_str": "error", "completed": False, "messages": [
+        ["execution_start", {}],
+        ["execution_error", {"node_type": "CheckpointLoaderSimple",
+                             "exception_message": "Error while deserializing header: header too large\n"}]]}
+    message = comfy_error(status)
+    assert "CheckpointLoaderSimple" in message and "header too large" in message and "re-download" in message
+    assert comfy_error({"messages": []}) == "ComfyUI reported a failed portrait workflow."

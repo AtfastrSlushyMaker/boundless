@@ -2,8 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ChevronDown, CloudAlert, LoaderCircle, Save } from "lucide-react";
-import { useState } from "react";
+import { ChevronDown, CloudAlert, LoaderCircle, RefreshCw, Save } from "lucide-react";
+import { useEffect, useState } from "react";
 import { api, ModelRole, ModelRoleSetting, ModelSettings } from "@/lib/api";
 
 const ROLE_COPY: Record<Exclude<ModelRole, "state_fallback">, { label: string; inherit: string; help: string }> = {
@@ -28,6 +28,64 @@ function hostedProvider(role: Pick<ModelRoleSetting, "provider" | "base_url">): 
 }
 
 type Draft = Record<ModelRole, ModelRoleSetting>;
+const CUSTOM = "__custom__";
+
+/** Model picker filled from what the chosen runtime reports as installed; free text stays available. */
+function RoleModelField({ provider, baseUrl, value, onChange }: {
+  provider: ModelSettings["provider"]; baseUrl: string; value: string; onChange: (model: string) => void;
+}) {
+  const [endpoint, setEndpoint] = useState(baseUrl);
+  const [typing, setTyping] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setEndpoint(baseUrl), 450);
+    return () => window.clearTimeout(timer);
+  }, [baseUrl]);
+  const validEndpoint = /^https?:\/\/\S+/i.test(endpoint);
+  const models = useQuery({
+    queryKey: ["role-models", provider, provider === "deepseek" ? "" : endpoint],
+    queryFn: async () => {
+      if (provider === "deepseek") return (await api.deepseekModels()).models;
+      if (provider === "ollama") return (await api.ollamaModels(endpoint)).models;
+      if (provider === "mlx") {
+        const [runtime, served] = await Promise.allSettled([api.mlxRuntime(), api.compatibleModels(endpoint)]);
+        const names = [...(runtime.status === "fulfilled" ? runtime.value.models.map((entry) => entry.id) : []),
+          ...(served.status === "fulfilled" ? served.value.models : [])];
+        if (!names.length && served.status === "rejected") throw served.reason;
+        return Array.from(new Set(names));
+      }
+      return (await api.compatibleModels(endpoint)).models;
+    },
+    enabled: provider === "deepseek" || validEndpoint,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const options = models.data ?? [];
+  const listed = options.includes(value);
+  const showSelect = options.length > 0 && !typing && (listed || !value);
+  return <label className="role-model-field"><span>Model</span>
+    <span className="role-model-control">
+      {showSelect
+        ? <select value={listed ? value : ""} onChange={(event) => {
+          if (event.target.value === CUSTOM) { setTyping(true); return; }
+          onChange(event.target.value);
+        }}>
+          {!listed && <option value="" disabled>Choose an installed model…</option>}
+          {options.map((name) => <option key={name} value={name} title={name}>{name.split("/").filter(Boolean).pop() ?? name}</option>)}
+          <option value={CUSTOM}>Other (type a name)…</option>
+        </select>
+        : <input value={value} placeholder="Model identifier" onChange={(event) => onChange(event.target.value)} spellCheck={false}
+          list={options.length ? `role-models-${provider}` : undefined} />}
+      <button type="button" className="role-model-refresh" aria-label="Reload installed models" title="Reload installed models"
+        disabled={models.isFetching} onClick={() => { setTyping(false); void models.refetch(); }}>
+        {models.isFetching ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}</button>
+    </span>
+    {options.length > 0 && <datalist id={`role-models-${provider}`}>{options.map((name) => <option key={name} value={name} />)}</datalist>}
+    <small className="role-model-status">{models.isFetching ? "Looking for installed models…"
+      : models.isError ? `Could not list models${provider === "deepseek" ? " (save a DeepSeek key first)" : " from this endpoint"}. Type the name instead.`
+      : models.isSuccess && !options.length ? "No installed models reported. Type the name instead."
+      : options.length ? `${options.length} model${options.length === 1 ? "" : "s"} available` : ""}</small>
+  </label>;
+}
 
 export function ModelRolesPanel({ narratorLabel }: { narratorLabel: string }) {
   const client = useQueryClient();
@@ -76,7 +134,8 @@ export function ModelRolesPanel({ narratorLabel }: { narratorLabel: string }) {
       </select></label>
     {form[role].provider !== "deepseek" && <label><span>Endpoint</span>
       <input value={form[role].base_url || DEFAULT_ENDPOINTS[form[role].provider]} onChange={(event) => update(role, { base_url: event.target.value })} spellCheck={false} /></label>}
-    <label><span>Model</span><input value={form[role].model} placeholder="Model identifier" onChange={(event) => update(role, { model: event.target.value })} spellCheck={false} /></label>
+    <RoleModelField provider={form[role].provider} baseUrl={form[role].base_url || DEFAULT_ENDPOINTS[form[role].provider]}
+      value={form[role].model} onChange={(model) => update(role, { model })} />
   </div>;
 
   return <section className={`model-roles${open ? " is-open" : ""}`}>
