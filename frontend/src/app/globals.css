@@ -575,8 +575,9 @@ body:has(.game-shell){background:var(--deep,#0b0f0d)}
 .game-shell{position:fixed;inset:0;height:auto}
 .story-reader,.rail-content,.people-index-list,.people-inspector,.settings-fields{overscroll-behavior:contain}
 /* Full-body portraits: thumbnails zoom onto the face; the lightbox shows the whole figure. */
-.is-full-body{overflow:hidden}
-.is-full-body img{width:100%!important;height:100%!important;object-fit:cover;object-position:50% 4%;transform:scale(3.1);transform-origin:50% 9%}
+/* Full-length portraits: thumbnails zoom onto the detected face (see faceCrop). */
+.has-face-crop{position:relative;overflow:hidden}
+.has-face-crop img{position:absolute;max-width:none!important;width:auto!important;height:var(--face-h)!important;left:var(--face-l);top:var(--face-t);object-fit:fill!important;transform:none}
 .portrait-lightbox img{max-height:calc(100dvh - 120px)}
 .visually-hidden{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 /* Layout layers clip instead of scroll, so focus, anchors, or hidden inputs can never shift the app. */

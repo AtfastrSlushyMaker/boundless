@@ -17,7 +17,7 @@ import { AtlasArtwork } from "@/components/AtlasArtwork";
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
 import { CampaignHealth } from "@/components/CampaignHealth";
 import { GenerationProgress } from "@/components/GenerationProgress";
-import { PortraitButton } from "@/components/PortraitLightbox";
+import { faceCrop, PortraitButton } from "@/components/PortraitLightbox";
 import { ProfileList } from "@/components/LivingProfile";
 import { PeoplePanel } from "@/components/PeoplePanel";
 import { ChangeToasts, TurnChanges } from "@/components/TurnChanges";
@@ -222,7 +222,7 @@ function SidebarContent({ panel, campaign, onRefreshSetup, refreshingSetup, refr
     };
     return <div className="lore-content character-sheet">
       <p className="lore-label">YOUR CHARACTER</p>
-      <div className="character-sheet-head">{portrait ? <PortraitButton className={`character-sheet-portrait${protagonist?.attributes?.portrait_framing === "full_body" ? " is-full-body" : ""}`} src={portrait} name={campaign.protagonist_name} caption="Player character"><Image src={portrait} alt="" width={72} height={72} unoptimized /></PortraitButton>
+      <div className="character-sheet-head">{portrait ? <PortraitButton className={`character-sheet-portrait${faceCrop(protagonist?.attributes).className}`} style={faceCrop(protagonist?.attributes).style} src={portrait} name={campaign.protagonist_name} caption="Player character"><Image src={portrait} alt="" width={72} height={72} unoptimized /></PortraitButton>
         : <div className="character-sheet-portrait"><span>{campaign.protagonist_name.charAt(0)}</span></div>}<div><h2 className="lore-name">{campaign.protagonist_name}</h2><p>{protagonist?.role || "Player character"}</p></div></div>
       <nav className="sheet-tabs" aria-label="Character details">{(["overview", "traits", "history", "goals", "reputation"] as const).map((tab) => <button type="button" key={tab} aria-current={characterTab === tab ? "page" : undefined} onClick={() => setCharacterTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
       {characterTab === "overview" && <>

@@ -16,12 +16,14 @@ from app.services.image_provider import (
     ComfyUIImageProvider,
     horde_result,
     importance_for,
+    portrait_file,
     portrait_prompt,
     request_horde,
     stable_seed,
     store_portrait,
     workflow_for,
 )
+from app.services.portrait_focus import FULL_BODY_DEFAULT, face_focus, image_aspect
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +168,7 @@ async def process_one_portrait() -> None:
                     attributes["avatar_url"] = f"/api/portraits/{job.id}"
                     attributes["portrait_seed"] = job.metadata_json["seed"]
                     attributes["portrait_framing"] = job.metadata_json.get("framing", "upper_body")
+                    attributes["portrait_focus"] = await asyncio.to_thread(focus_for, image, attributes["portrait_framing"])
                     attributes.pop("avatar_job", None)
                     character.attributes = attributes
             await session.commit()
@@ -185,7 +188,39 @@ async def process_one_portrait() -> None:
             logger.warning("Portrait job %s: %s", job.id, type(exc).__name__)
 
 
+def focus_for(image: bytes, framing: str) -> dict | None:
+    """Face position for thumbnails; full-length portraits fall back to a standing figure's head."""
+    focus = face_focus(image)
+    if focus is None and framing == "full_body":
+        focus = dict(FULL_BODY_DEFAULT)
+    if focus is not None:
+        focus["aspect"] = image_aspect(image) or 832 / 1216
+    return focus
+
+
+async def backfill_focus() -> None:
+    """Portraits made before face detection get a focus once, so older thumbnails crop too."""
+    async with SessionLocal() as session:
+        jobs = (await session.scalars(select(PortraitJob).where(PortraitJob.status == "COMPLETE"))).all()
+        for job in jobs:
+            character = await session.get(Character, job.character_id)
+            attributes = dict(character.attributes or {}) if character else {}
+            if not character or attributes.get("avatar_url") != f"/api/portraits/{job.id}" or "portrait_focus" in attributes:
+                continue
+            try:
+                image = portrait_file(job.image_path).read_bytes()
+            except (ValueError, OSError):
+                continue
+            attributes["portrait_focus"] = await asyncio.to_thread(focus_for, image, attributes.get("portrait_framing", "upper_body"))
+            character.attributes = attributes
+        await session.commit()
+
+
 async def portrait_worker() -> None:
+    try:
+        await backfill_focus()
+    except Exception:
+        logger.exception("Portrait focus backfill failed")
     while True:
         try:
             await process_one_portrait()

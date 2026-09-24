@@ -32,7 +32,13 @@ from app.db.models import (
     Turn,
 )
 from app.llm.base import LLMProvider, ModelUnavailable
-from app.llm.router import RoutedModel, hosted_fallback_enabled, is_local_endpoint, route
+from app.llm.router import (
+    RoutedModel,
+    hosted_fallback_enabled,
+    is_local_endpoint,
+    mature_writer,
+    route,
+)
 from app.llm.router import active_profile as _active_profile
 from app.llm.router import provider_for_profile as _provider_for_profile
 from app.llm.structured import parse_json_response, salvage_interpretation
@@ -48,6 +54,13 @@ from app.services.character_store import StoreLog
 from app.services.choice_service import suggest_choices
 from app.services.context_builder import build_messages
 from app.services.identity import normalize_reference
+from app.services.mature_scene import (
+    REFUSAL,
+    direct,
+    is_mature_turn,
+    scene_has_minor,
+    writer_messages,
+)
 from app.services.narration import stream_narration
 from app.services.post_turn import enqueue
 from app.services.state_context import build_interpreter_request
@@ -269,11 +282,37 @@ async def stream_turn(session: AsyncSession, campaign: Campaign, branch: Branch,
     diagnostics: dict[str, Any] = {"narrator": narrator.describe(), "canon_notes": notes, "attempt": turn.attempt,
                                    "reused_failed_attempt": reused}
     started = time.monotonic()
+    max_tokens = LENGTH_TOKENS.get(profile.response_length if profile else "standard", 1200)
+    temperature = profile.temperature if profile else settings.llm_temperature
     try:
-        async for piece in stream_narration(provider, messages,
-                                            max_tokens=LENGTH_TOKENS.get(profile.response_length if profile else "standard", 1200),
-                                            temperature=profile.temperature if profile else settings.llm_temperature):
-            full += piece
+        writer = await mature_writer(session, _factory)
+        recent_text = parent_turn.gm_response if parent_turn else ""
+        if writer and await is_mature_turn(session, branch.id, context_state, action, recent_text or ""):
+            # The narrator still decides what happens; the mature model writes it without toning it down.
+            beats = await direct(provider, messages, temperature=temperature)
+            diagnostics["mature_scene"] = {"writer": writer.describe(), "directed": bool(beats)}
+            writer_context = messages if writer.hosted else await build_messages(
+                session, campaign, branch.id, action, parent_turn_id, context_state, instruction,
+                context_window=writer.profile.context_window, canon_notes=notes)
+            try:
+                async for piece in stream_narration(writer.provider, writer_messages(writer_context, beats),
+                                                    max_tokens=max_tokens, temperature=temperature):
+                    full += piece
+            except ModelUnavailable as exc:
+                diagnostics["mature_scene"]["error"] = str(exc)[:300]
+                full = ""
+        if not full.strip():
+            async for piece in stream_narration(provider, messages, max_tokens=max_tokens, temperature=temperature):
+                full += piece
+            if writer and REFUSAL.search(full[:240]) and not await scene_has_minor(
+                    session, branch.id, context_state, f"{action}\n{recent_text or ''}"):
+                # A hosted narrator declined; the user's own mature model writes the passage instead.
+                diagnostics["mature_scene"] = {"writer": writer.describe(), "narrator_refused": True}
+                refused, full = full, ""
+                async for piece in stream_narration(writer.provider, writer_messages(messages, ""),
+                                                    max_tokens=max_tokens, temperature=temperature):
+                    full += piece
+                full = full or refused
         if not full.strip():
             raise ModelUnavailable("The model returned an empty response. Check its chat template and model profile.")
         diagnostics["narration_ms"] = round((time.monotonic() - started) * 1000)

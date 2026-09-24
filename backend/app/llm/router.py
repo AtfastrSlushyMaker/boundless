@@ -1,8 +1,9 @@
-"""Model roles: narrator, state tracking, summary, canon repair, and optional hosted fallback.
+"""Model roles: narrator, state tracking, summary, canon repair, mature scenes, and optional hosted fallback.
 
 Default: every role uses the active narrator model. A role with its own saved profile
 overrides that. The state fallback is used only when the user explicitly enables it,
-because it may send campaign content to a hosted provider.
+because it may send campaign content to a hosted provider. The mature-scenes writer is
+also opt-in: it never inherits, so explicit prose only moves to a model the user chose.
 """
 
 from dataclasses import dataclass
@@ -17,7 +18,7 @@ from app.db.models import ModelProfile
 from app.llm.base import LLMProvider
 from app.llm.gateway import get_provider
 
-ROLES = ("narrator", "state", "summary", "canon_repair", "state_fallback")
+ROLES = ("narrator", "state", "summary", "canon_repair", "mature", "state_fallback")
 INHERITS = {"state": ("narrator",), "summary": ("state", "narrator"), "canon_repair": ("narrator",)}
 FALLBACK_FLAG = "hosted_fallback_enabled"
 
@@ -100,3 +101,14 @@ async def route(session: AsyncSession, role: str, provider_factory=None) -> Rout
         if profile:
             return RoutedModel(role, factory(profile), profile, parent)
     return RoutedModel(role, factory(None), None, "default")
+
+
+async def mature_writer(session: AsyncSession, provider_factory=None) -> RoutedModel | None:
+    """The model chosen for mature scenes, or None when the user has not picked one."""
+    profile = await role_profile(session, "mature")
+    return RoutedModel("mature", (provider_factory or provider_for_profile)(profile), profile, "mature") if profile else None
+
+
+async def visual_model(session: AsyncSession, provider_factory=None) -> RoutedModel:
+    """Character appearance descriptions use the mature model when one is set, so detail is not censored."""
+    return await mature_writer(session, provider_factory) or await route(session, "state", provider_factory)

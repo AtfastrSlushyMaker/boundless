@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Branch, Campaign, Character, PostTurnJob
 from app.db.session import SessionLocal
-from app.llm.router import provider_for_profile, route
+from app.llm.router import provider_for_profile, route, visual_model
 from app.llm.structured import parse_json_response
 from app.services.abilities import gain_ability
 from app.services.identity import normalize_reference
@@ -202,7 +202,7 @@ async def _visuals(session: AsyncSession, job: PostTurnJob, factory: Callable) -
                   and head.turn_index - person.last_seen_turn_index <= 1][:4]
     if not candidates:
         return
-    routed = await route(session, "state", factory)
+    routed = await visual_model(session, factory)
     for person in candidates:
         await describe_and_store(session, campaign, person, routed.provider, turns)
 

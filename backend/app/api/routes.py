@@ -45,7 +45,7 @@ from app.llm.base import ModelUnavailable
 from app.llm.gateway import DeepSeekProvider, mlx_base_url
 from app.llm.ollama import OllamaProvider
 from app.llm.openai_compatible import OpenAICompatibleProvider
-from app.llm.router import ROLES, is_hosted, route
+from app.llm.router import ROLES, is_hosted, route, visual_model
 from app.schemas import (
     BranchCreate,
     CampaignCreate,
@@ -578,7 +578,7 @@ async def generate_character_avatar(campaign_id: UUID, character_id: UUID, branc
         # Build the look from the story first, so the portrait matches the narration.
         branch = await session.get(Branch, branch_id)
         try:
-            routed = await route(session, "state", provider_for_profile)
+            routed = await visual_model(session, provider_for_profile)
             await describe_and_store(session, campaign, character, routed.provider,
                                      await history_for_branch(session, branch.head_turn_id, limit=80))
         except Exception:

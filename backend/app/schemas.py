@@ -133,7 +133,7 @@ class MLXStartRequest(BaseModel):
 class ModelRoleUpdate(BaseModel):
     """One AI role. ``inherit`` means "use the model this role falls back to"."""
 
-    role: Literal["state", "summary", "canon_repair", "state_fallback"]
+    role: Literal["state", "summary", "canon_repair", "mature", "state_fallback"]
     inherit: bool = True
     provider: Literal["mlx", "openai-compatible", "ollama", "deepseek"] = "mlx"
     base_url: str = Field(default="http://127.0.0.1:8088/v1", max_length=400)
@@ -154,7 +154,7 @@ class ModelRoleUpdate(BaseModel):
 
 
 class ModelRolesUpdate(BaseModel):
-    roles: list[ModelRoleUpdate] = Field(default_factory=list, max_length=4)
+    roles: list[ModelRoleUpdate] = Field(default_factory=list, max_length=5)
     hosted_fallback_enabled: bool = False
 
 

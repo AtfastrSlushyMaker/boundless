@@ -6,12 +6,27 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 type Portrait = { src: string; name: string; caption?: string };
+type Focus = { x?: number; y?: number; size?: number; aspect?: number };
+
+/** Thumbnail crop that zooms a full-length portrait onto the face; the lightbox still shows the whole figure. */
+export function faceCrop(attributes?: Record<string, unknown> | null): { className: string; style?: React.CSSProperties } {
+  const focus = (attributes?.portrait_focus ?? null) as Focus | null;
+  if (!focus && attributes?.portrait_framing !== "full_body") return { className: "" };
+  const x = focus?.x ?? 0.5, y = focus?.y ?? 0.125, size = Math.max(focus?.size ?? 0.085, 0.03), aspect = focus?.aspect ?? 832 / 1216;
+  const scale = Math.max(0.46 / size, 1 / aspect, 1);
+  const clamp = (value: number, min: number) => Math.min(0, Math.max(min, value));
+  return { className: " has-face-crop", style: {
+    "--face-h": `${(scale * 100).toFixed(2)}%`,
+    "--face-l": `${(clamp(0.5 - x * scale * aspect, 1 - scale * aspect) * 100).toFixed(2)}%`,
+    "--face-t": `${(clamp(0.5 - y * scale, 1 - scale) * 100).toFixed(2)}%`,
+  } as React.CSSProperties };
+}
 
 /** A portrait thumbnail that opens full size, uncropped, over everything else. */
-export function PortraitButton({ src, name, caption, className, children }: Portrait & { className: string; children: React.ReactNode }) {
+export function PortraitButton({ src, name, caption, className, style, children }: Portrait & { className: string; style?: React.CSSProperties; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   return <>
-    <button type="button" className={`${className} portrait-zoomable`} onClick={() => setOpen(true)}
+    <button type="button" className={`${className} portrait-zoomable`} style={style} onClick={() => setOpen(true)}
       aria-label={`View ${name}'s portrait full size`} title="View full size">{children}</button>
     <PortraitLightbox portrait={open ? { src, name, caption } : null} onClose={() => setOpen(false)} />
   </>;

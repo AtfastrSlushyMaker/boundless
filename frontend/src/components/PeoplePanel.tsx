@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { FormEvent, PointerEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { PortraitButton } from "@/components/PortraitLightbox";
+import { faceCrop, PortraitButton } from "@/components/PortraitLightbox";
 import { api, portraitUrl } from "@/lib/api";
 import type { CampaignDetail, Character, Importance, Relationship, RelationshipEvent } from "@/lib/api";
 
@@ -514,7 +514,7 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
 
   const detail = selected && <section className="person-detail" aria-live="polite">
     <div className="person-detail-head"><div className="person-identity">
-      {avatarUrl ? <PortraitButton className={`person-portrait${selected.attributes?.portrait_framing === "full_body" ? " is-full-body" : ""}`} src={avatarUrl} name={selected.name} caption={selected.role}>
+      {avatarUrl ? <PortraitButton className={`person-portrait${faceCrop(selected.attributes).className}`} style={faceCrop(selected.attributes).style} src={avatarUrl} name={selected.name} caption={selected.role}>
         <Image src={avatarUrl} alt="" width={68} height={68} unoptimized /></PortraitButton>
         : <div className="person-portrait" aria-label={`No portrait for ${selected.name}`}><span aria-hidden="true">{selected.name.charAt(0).toLocaleUpperCase()}</span></div>}<div><p className="person-detail-role">{selected.role || "Role unknown"}</p><h3>{selected.name}</h3>
         {selected.name !== campaign.protagonist_name && <span className={`importance-badge importance-badge--${importanceOf(selected).toLowerCase()}`}>{IMPORTANCE_LABEL[importanceOf(selected)]}</span>}</div></div>
@@ -711,7 +711,7 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
                     initial={reduceMotion ? false : { opacity: 0, scale: 0.8 }} animate={{ opacity: dimmed ? 0.42 : 1, scale: 1 }}
                     whileHover={reduceMotion ? undefined : { scale: 1.04 }}
                     transition={{ type: "spring", stiffness: 320, damping: 26, delay: reduceMotion ? 0 : Math.min(nodeIndex * 0.025, 0.5) }}>
-                    <span className={`people-node-portrait${person.attributes?.portrait_framing === "full_body" ? " is-full-body" : ""}`} aria-hidden="true">{portraitUrl(person.attributes?.avatar_url) ? <Image src={portraitUrl(person.attributes?.avatar_url)} alt="" width={46} height={46} unoptimized /> : person.name.charAt(0).toLocaleUpperCase()}</span>
+                    <span className={`people-node-portrait${faceCrop(person.attributes).className}`} style={faceCrop(person.attributes).style} aria-hidden="true">{portraitUrl(person.attributes?.avatar_url) ? <Image src={portraitUrl(person.attributes?.avatar_url)} alt="" width={46} height={46} unoptimized /> : person.name.charAt(0).toLocaleUpperCase()}</span>
                     <strong>{person.name}</strong><span>{person.role || (person.name === campaign.protagonist_name ? "Player character" : "Role unknown")}</span>
                   </motion.button>;
                 })}

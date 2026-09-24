@@ -139,7 +139,7 @@ export type CampaignDetail = {
   summary_state?: { through_turn_index: number; last_attempt_turn_index: number; last_success_at: string | null; last_error: string; method: string } | null;
 };
 
-export type ModelRole = "state" | "summary" | "canon_repair" | "state_fallback";
+export type ModelRole = "state" | "summary" | "canon_repair" | "mature" | "state_fallback";
 export type ModelRoleSetting = {
   role: ModelRole; inherit: boolean; provider: ModelSettings["provider"]; base_url: string; model: string;
   temperature: number; context_window: number; hosted: boolean;

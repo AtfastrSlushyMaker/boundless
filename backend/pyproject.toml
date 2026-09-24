@@ -15,6 +15,7 @@ dependencies = [
   "python-multipart>=0.0.18",
   "sqlalchemy>=2.0",
   "uvicorn[standard]>=0.30",
+  "opencv-python-headless>=4.10,<5",
 ]
 
 [project.optional-dependencies]

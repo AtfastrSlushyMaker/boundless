@@ -10,6 +10,8 @@ const ROLE_COPY: Record<Exclude<ModelRole, "state_fallback">, { label: string; i
   state: { label: "State tracking", inherit: "Same as narrator", help: "Reads each turn and updates people, items, places, and objectives." },
   summary: { label: "Summary and memory", inherit: "Same as state tracking", help: "Keeps the rolling campaign summary current." },
   canon_repair: { label: "Canon repair", inherit: "Same as narrator", help: "Rewrites a passage that breaks a hard rule." },
+  mature: { label: "Mature scenes", inherit: "Off · use narrator",
+    help: "Writes explicit scenes between adults and describes how characters look. The narrator still decides what happens; this model writes it without toning it down. Pick an uncensored local model." },
 };
 const DEFAULT_ENDPOINTS: Record<ModelSettings["provider"], string> = {
   mlx: "http://127.0.0.1:8088/v1", ollama: "http://127.0.0.1:11434", "openai-compatible": "http://127.0.0.1:1234/v1",
@@ -46,7 +48,7 @@ export function ModelRolesPanel({ narratorLabel }: { narratorLabel: string }) {
     mutationFn: () => {
       if (!form) throw new Error("Roles are still loading.");
       return api.saveModelRoles({
-        roles: (["state", "summary", "canon_repair", "state_fallback"] as ModelRole[]).map((role) => ({
+        roles: (["state", "summary", "canon_repair", "mature", "state_fallback"] as ModelRole[]).map((role) => ({
           role, inherit: role === "state_fallback" ? !fallbackOn : form[role].inherit, provider: form[role].provider,
           base_url: form[role].base_url || DEFAULT_ENDPOINTS[form[role].provider], model: form[role].model,
           temperature: form[role].temperature, context_window: form[role].context_window,
@@ -60,7 +62,7 @@ export function ModelRolesPanel({ narratorLabel }: { narratorLabel: string }) {
     },
     onError: (error) => setMessage(error.message),
   });
-  const hostedRoles = form ? (["state", "summary", "canon_repair"] as const).filter((role) => !form[role].inherit && hostedProvider(form[role])) : [];
+  const hostedRoles = form ? (["state", "summary", "canon_repair", "mature"] as const).filter((role) => !form[role].inherit && hostedProvider(form[role])) : [];
   const narratorLocal = roles.data ? !roles.data.narrator_hosted : true;
 
   const roleFields = (role: ModelRole) => form && <div className="role-fields">
@@ -88,7 +90,7 @@ export function ModelRolesPanel({ narratorLabel }: { narratorLabel: string }) {
         {roles.isLoading && <p className="field-help"><LoaderCircle size={13} className="spin" /> Loading roles…</p>}
         {form && <div className="model-roles-grid">
           <div className="role-row role-row--fixed"><div><strong>Narrator</strong><small>Tells the story.</small></div><span className="role-chip">{narratorLabel}</span></div>
-          {(["state", "summary", "canon_repair"] as const).map((role) => <div className="role-row" key={role}>
+          {(["state", "summary", "canon_repair", "mature"] as const).map((role) => <div className="role-row" key={role}>
             <div><strong>{ROLE_COPY[role].label}</strong><small>{ROLE_COPY[role].help}</small></div>
             <select aria-label={`${ROLE_COPY[role].label} model`} value={form[role].inherit ? "inherit" : "custom"}
               onChange={(event) => update(role, { inherit: event.target.value === "inherit" })}>
