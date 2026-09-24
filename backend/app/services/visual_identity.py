@@ -18,23 +18,28 @@ STABLE_FIELDS = ("species", "apparent_age", "gender_presentation", "height", "bu
 CHANGING_FIELDS = ("clothing", "current_state")
 MINOR_WORDS = re.compile(r"\b(?:child|children|kid|kids|boy|girl|teen|teenage|teenager|adolescent|youngster|minor|infant|"
                          r"toddler|baby|little one|schoolchild|pupil|underage|young lad|young lass|urchin|street kid|"
-                         r"\d{1,2}[- ]year[- ]old)\b", re.IGNORECASE)
+                         r"street child)\b", re.IGNORECASE)
+AGE_PHRASE = re.compile(r"\b(\d{1,2})[- ]year[- ]old\b", re.IGNORECASE)
 ADULT_WORDS = re.compile(r"\b(?:adult|grown|middle[- ]aged|elderly|old|aged|mature|in (?:his|her|their) (?:twenties|thirties|"
                          r"forties|fifties|sixties|seventies|eighties)|twenties|thirties|forties|fifties|sixties|veteran|"
                          r"grandmother|grandfather|mother of|father of|widow|widower|woman|man)\b", re.IGNORECASE)
+CLEAR_ADULT_AGE = re.compile(r"\b(?:adult|grown|middle[- ]aged|elderly|twenties|thirties|forties|fifties|sixties|"
+                             r"seventies|eighties|nineties)\b", re.IGNORECASE)
 AGE_NUMBER = re.compile(r"\b(\d{1,3})\b")
 
 VISUAL_PROMPT = """You describe how a character in a role-playing story looks, for continuity and a portrait.
-Use only what the narration and known facts establish, plus plausible, restrained details that fit the setting where the text is silent. Keep established details exactly.
+Use only what the narration and known facts establish, plus plausible details that fit the setting where the text is silent. Keep established details exactly.
 Return JSON only:
 {"apparent_age":"e.g. late thirties","gender_presentation":"","species":"","height":"","build":"","skin":"","face":"","eyes":"","hair":"",
  "clothing":"what they wear now","current_state":"visible condition now (wounds, dirt, posture)","features":["distinctive marks"],
  "body":"","adult":true}
 Rules:
 - "adult" is true only if the story makes clear they are a grown adult. If age is unknown or they could be under 18, set "adult": false.
-- "body": only for adults, and only what the narration shows (for example, if they are undressed, describe it plainly and without euphemism). Leave it empty otherwise.
+- "body": only for adults, and only what the narration shows. Leave it empty otherwise.
 - Never describe anyone who is or might be under 18 in a sexual or suggestive way. For them, describe only face, hair, clothing, and ordinary features.
 - Short phrases, no story, no names in the fields."""
+
+MATURE_VISUAL_RULE = """For a clearly established adult, preserve visible nudity and mature body details stated in the narration or known facts. Describe them directly and specifically in the body field; do not soften them into vague terms or invent details the story does not establish. For anyone under 18 or of uncertain age, leave body empty and keep the description non-suggestive."""
 
 
 def looks_minor(visual: dict[str, Any], character: Any | None = None) -> bool:
@@ -42,6 +47,8 @@ def looks_minor(visual: dict[str, Any], character: Any | None = None) -> bool:
     if character is not None:
         text += f" {getattr(character, 'name', '')} {getattr(character, 'role', '')}"
     if MINOR_WORDS.search(text):
+        return True
+    if any(int(match.group(1)) < 18 for match in AGE_PHRASE.finditer(text)):
         return True
     for match in AGE_NUMBER.finditer(str(visual.get("apparent_age") or "")):
         if int(match.group(1)) < 18:
@@ -57,6 +64,8 @@ def confirmed_adult(visual: dict[str, Any], character: Any | None = None) -> boo
     numbers = [int(match.group(1)) for match in AGE_NUMBER.finditer(age)]
     if numbers:
         return min(numbers) >= 18
+    if CLEAR_ADULT_AGE.search(age):
+        return True
     return visual.get("adult") is True and bool(ADULT_WORDS.search(age))
 
 
@@ -94,9 +103,9 @@ def needs_visual(character: Any) -> bool:
 
 
 async def describe_character(provider: LLMProvider, *, name: str, role: str, facts: list[str], excerpts: list[str],
-                             tone: str) -> dict[str, Any]:
+                             tone: str, mature_detail: bool = False) -> dict[str, Any]:
     raw = await provider.complete_json([
-        {"role": "system", "content": VISUAL_PROMPT},
+        {"role": "system", "content": VISUAL_PROMPT + ("\n" + MATURE_VISUAL_RULE if mature_detail else "")},
         {"role": "user", "content": json.dumps({"character": name, "role": role, "known_facts": facts[-12:],
                                                 "story_tone": tone, "narration_excerpts": excerpts[-6:]}, ensure_ascii=False)},
     ], temperature=0.3, max_tokens=700)

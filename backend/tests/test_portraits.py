@@ -11,6 +11,7 @@ from app.db.session import SessionLocal
 from app.services.image_provider import (
     ComfyUIImageProvider,
     importance_for,
+    mature_portrait_allowed,
     portrait_file,
     portrait_prompt,
     stable_seed,
@@ -19,6 +20,7 @@ from app.services.image_provider import (
     workflow_for,
 )
 from app.services.portrait_jobs import profile_dict
+from app.services.post_turn import needs_mature_visual
 from tests.conftest import new_campaign
 
 
@@ -232,7 +234,7 @@ async def test_recurring_portrait_retries_offline_then_completes(client, scripte
 
 
 def test_visual_identity_is_stable_and_mature_detail_needs_a_confirmed_adult():
-    from app.services.visual_identity import confirmed_adult, merge_visual
+    from app.services.visual_identity import confirmed_adult, looks_minor, merge_visual
 
     visual = merge_visual({}, {"apparent_age": "late thirties", "hair": "cropped gray hair", "clothing": "dark coat",
                                "adult": True, "body": "bare shoulders marked with old scars"})
@@ -243,6 +245,10 @@ def test_visual_identity_is_stable_and_mature_detail_needs_a_confirmed_adult():
     assert "body" not in minor and minor["adult"] is False and not confirmed_adult(minor)
     unknown = merge_visual({}, {"apparent_age": "unclear", "adult": True, "body": "undressed"})
     assert "body" not in unknown and not confirmed_adult(unknown)
+    assert confirmed_adult({"apparent_age": "25-year-old"})
+    assert not looks_minor({"apparent_age": "25-year-old"})
+    assert not confirmed_adult({"apparent_age": "16-year-old"})
+    assert looks_minor({}, SimpleNamespace(name="Neri", role="16-year-old traveller"))
 
 
 def test_mature_portraits_are_opt_in_and_never_for_minors():
@@ -256,6 +262,47 @@ def test_mature_portraits_are_opt_in_and_never_for_minors():
     child.role = "street kid"
     positive, negative = portrait_prompt(child, campaign(), allow_mature=True)
     assert "undressed" not in positive and "nudity" in negative and "sexual content" in negative
+    assert mature_portrait_allowed(adult, True)
+    assert not mature_portrait_allowed(child, True)
+    assert not mature_portrait_allowed(adult, False)
+    missing_flag = character(visual_identity={"apparent_age": "early thirties", "body": "undressed to the waist"})
+    assert mature_portrait_allowed(missing_flag, True)
+    positive, negative = portrait_prompt(missing_flag, campaign(), allow_mature=True)
+    assert "adult subject, undressed to the waist" in positive and "nudity" not in negative
+    uncertain = character(visual_identity={"apparent_age": "unknown", "body": "undressed"})
+    assert not mature_portrait_allowed(uncertain, True)
+
+
+def test_existing_appearance_gets_mature_description_before_automatic_portrait():
+    settings = SimpleNamespace(enabled=True, allow_mature=True, auto_recurring=False,
+                               auto_major=False, auto_companion=True, auto_minor=False)
+    person = character(visual_identity={"apparent_age": "early thirties", "hair": "black", "eyes": "amber"})
+    assert needs_mature_visual(person, settings, True)
+    assert not needs_mature_visual(person, settings, False)
+    person.attributes["avatar_job"] = "queued"
+    assert not needs_mature_visual(person, settings, True)
+    person.attributes = {"portrait_seed": 17}
+    assert not needs_mature_visual(person, settings, True)
+
+
+@pytest.mark.asyncio
+async def test_mature_visual_description_asks_for_story_supported_detail():
+    from app.services.visual_identity import describe_character
+
+    class CaptureModel:
+        messages = None
+
+        async def complete_json(self, messages, **_options):
+            self.messages = messages
+            return '{"apparent_age":"thirties","adult":true,"body":""}'
+
+    model = CaptureModel()
+    await describe_character(model, name="Aria", role="Companion", facts=[], excerpts=[], tone="fantasy")
+    assert "do not soften" not in model.messages[0]["content"]
+    await describe_character(model, name="Aria", role="Companion", facts=[], excerpts=[], tone="fantasy",
+                             mature_detail=True)
+    assert "do not soften" in model.messages[0]["content"]
+    assert "under 18 or of uncertain age" in model.messages[0]["content"]
 
 
 def test_player_appearance_text_is_used_but_never_sexualizes_minors():

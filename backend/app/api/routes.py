@@ -47,7 +47,7 @@ from app.llm.base import ModelUnavailable
 from app.llm.gateway import DeepSeekProvider, mlx_base_url
 from app.llm.ollama import OllamaProvider
 from app.llm.openai_compatible import OpenAICompatibleProvider
-from app.llm.router import ROLES, is_hosted, route, visual_model
+from app.llm.router import ROLES, is_hosted, role_profile, route, visual_model
 from app.schemas import (
     BranchCreate,
     CampaignCreate,
@@ -600,13 +600,18 @@ async def generate_character_avatar(campaign_id: UUID, character_id: UUID, branc
     character = await _known_character(session, campaign_id, branch_id, character_id)
     from app.services.post_turn import describe_and_store
     from app.services.visual_identity import needs_visual
-    if needs_visual(character):
+    image_settings = await image_profile(session)
+    refresh_mature_description = bool(image_settings and image_settings.allow_mature
+                                      and await role_profile(session, "mature"))
+    if needs_visual(character) or refresh_mature_description:
         # Build the look from the story first, so the portrait matches the narration.
         branch = await session.get(Branch, branch_id)
         try:
             routed = await visual_model(session, provider_for_profile)
             await describe_and_store(session, campaign, character, routed.provider,
-                                     await history_for_branch(session, branch.head_turn_id, limit=80))
+                                     await history_for_branch(session, branch.head_turn_id, limit=80),
+                                     mature_detail=bool(image_settings and image_settings.allow_mature
+                                                        and routed.source_role == "mature"))
         except Exception:
             logger.warning("Visual description failed before portrait generation", exc_info=True)
     try:

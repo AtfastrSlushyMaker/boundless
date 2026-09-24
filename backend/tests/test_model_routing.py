@@ -1,13 +1,14 @@
 """Separate narrator/state/summary models, inheritance, and explicit hosted fallback."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import delete
 
 from app.db.models import ModelProfile
 from app.db.session import SessionLocal
-from app.llm.router import is_hosted, route
+from app.llm.router import is_hosted, route, visual_model
 from tests.conftest import ScriptedModel, detail, new_campaign, play
 
 
@@ -43,6 +44,23 @@ async def test_roles_inherit_the_narrator_until_overridden(client, clean_roles):
         assert summary.source_role == "state", "summary falls back to the state model before the narrator"
         assert canon.source_role in {"narrator", "default"}
         assert await route(session, "state_fallback", lambda profile: profile) is None
+
+
+@pytest.mark.asyncio
+async def test_visual_description_prefers_mature_role_over_state(monkeypatch):
+    from app.llm import router
+
+    mature = SimpleNamespace(role="mature", provider="openai-compatible",
+                             base_url="http://127.0.0.1:1234/v1", model="uncensored-local")
+
+    async def profile_for_role(_session, role):
+        assert role == "mature", "the state model must not be used when a mature role is configured"
+        return mature
+
+    monkeypatch.setattr(router, "role_profile", profile_for_role)
+    routed = await visual_model(None, lambda profile: profile)
+    assert routed.source_role == "mature"
+    assert routed.model_name == "uncensored-local"
 
 
 @pytest.mark.asyncio

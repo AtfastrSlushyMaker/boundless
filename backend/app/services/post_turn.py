@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Branch, Campaign, Character, PostTurnJob
 from app.db.session import SessionLocal
-from app.llm.router import provider_for_profile, route, visual_model
+from app.llm.router import provider_for_profile, role_profile, route, visual_model
 from app.llm.structured import parse_json_response
 from app.services.abilities import gain_ability
 from app.services.identity import normalize_reference
@@ -151,7 +151,8 @@ async def _profile(session: AsyncSession, job: PostTurnJob, factory: Callable) -
             checkpoint.state_snapshot = snapshot
 
 
-async def describe_and_store(session: AsyncSession, campaign: Campaign, person: Character, provider, turns) -> bool:
+async def describe_and_store(session: AsyncSession, campaign: Campaign, person: Character, provider, turns,
+                             *, mature_detail: bool = False) -> bool:
     """Build a character's visual identity from narration that mentions them. Returns True when stored."""
     import re
 
@@ -175,17 +176,32 @@ async def describe_and_store(session: AsyncSession, campaign: Campaign, person: 
     tone = str((campaign.constitution or {}).get("tone") or (campaign.theme_profile or {}).get("family") or "")
     proposed = await describe_character(provider, name=person.name, role=person.role or "",
                                         facts=list((person.attributes or {}).get("known_facts") or []),
-                                        excerpts=excerpts[-12:], tone=tone)
+                                        excerpts=excerpts[-12:], tone=tone, mature_detail=mature_detail)
     attributes = dict(person.attributes or {})
     attributes["visual_identity"] = merge_visual(attributes.get("visual_identity"), proposed)
     person.attributes = attributes
     return True
 
 
+def needs_mature_visual(person: Character, image_settings, mature_role_configured: bool) -> bool:
+    """Refresh an existing look once before an automatic mature portrait is queued."""
+    from app.services.image_provider import importance_for
+
+    if not (mature_role_configured and image_settings and image_settings.enabled and image_settings.allow_mature):
+        return False
+    attributes = person.attributes or {}
+    if attributes.get("avatar_url") or attributes.get("avatar_job") or "portrait_seed" in attributes:
+        return False
+    enabled = {"RECURRING": image_settings.auto_recurring, "MAJOR": image_settings.auto_major,
+               "COMPANION": image_settings.auto_companion, "MINOR": image_settings.auto_minor}
+    return bool(enabled.get(importance_for(person), False))
+
+
 async def _visuals(session: AsyncSession, job: PostTurnJob, factory: Callable) -> None:
     """Give people who just appeared a visual identity the narration supports, before portraits queue."""
     from app.db.models import Turn
     from app.services.context_builder import history_for_branch
+    from app.services.portrait_jobs import image_profile
     from app.services.visual_identity import needs_visual
 
     campaign = await session.get(Campaign, job.campaign_id)
@@ -197,14 +213,20 @@ async def _visuals(session: AsyncSession, job: PostTurnJob, factory: Callable) -
     people = (await session.scalars(select(Character).where(
         Character.branch_id == branch.id, Character.visibility == "PLAYER_KNOWN"))).all()
     player_key = normalize_reference(campaign.protagonist_name)
-    candidates = [person for person in people if normalize_reference(person.name) != player_key and needs_visual(person)
+    image_settings = await image_profile(session)
+    mature_role_configured = bool(image_settings and image_settings.enabled and image_settings.allow_mature
+                                  and await role_profile(session, "mature"))
+    candidates = [person for person in people if normalize_reference(person.name) != player_key
+                  and (needs_visual(person) or needs_mature_visual(person, image_settings, mature_role_configured))
                   and person.importance != "BACKGROUND" and head and person.last_seen_turn_index is not None
                   and head.turn_index - person.last_seen_turn_index <= 1][:4]
     if not candidates:
         return
     routed = await visual_model(session, factory)
     for person in candidates:
-        await describe_and_store(session, campaign, person, routed.provider, turns)
+        await describe_and_store(session, campaign, person, routed.provider, turns,
+                                 mature_detail=bool(image_settings and image_settings.allow_mature
+                                                    and routed.source_role == "mature"))
 
 
 async def _factions(session: AsyncSession, job: PostTurnJob, factory: Callable) -> None:

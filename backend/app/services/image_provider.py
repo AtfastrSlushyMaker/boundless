@@ -58,8 +58,16 @@ EXPLICIT_WORDS = re.compile(r"\b(?:nude|naked|topless|bottomless|nsfw|explicit|s
                             r"breasts?|nipples?|genitals?|erotic|seductive|provocative)\b", re.IGNORECASE)
 
 
-def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple[str, str]:
+def mature_portrait_allowed(character, allow_mature: bool) -> bool:
     from app.services.visual_identity import confirmed_adult, looks_minor
+
+    attributes = character.attributes or {}
+    visual = attributes.get("visual_identity") if isinstance(attributes.get("visual_identity"), dict) else {}
+    return allow_mature and not looks_minor(visual, character) and confirmed_adult(visual, character)
+
+
+def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple[str, str]:
+    from app.services.visual_identity import looks_minor
 
     attributes = character.attributes or {}
     visual = attributes.get("visual_identity") if isinstance(attributes.get("visual_identity"), dict) else {}
@@ -87,9 +95,8 @@ def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple
         if minor:
             text = EXPLICIT_WORDS.sub("", text)
         parts.append(text)
-    mature = allow_mature and not minor and confirmed_adult(visual, character)
-    if mature and isinstance(visual.get("body"), str) and visual["body"].strip():
-        parts.append(visual["body"].strip()[:300])
+    mature = mature_portrait_allowed(character, allow_mature)
+    body = visual.get("body") if mature and isinstance(visual.get("body"), str) else ""
     faction = attributes.get("faction") or attributes.get("faction_name")
     if isinstance(faction, str):
         parts.append(f"of {faction[:100]}")
@@ -103,7 +110,8 @@ def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple
             unique = [kept for kept in unique if kept.casefold() not in part.casefold()] + [part]
     positive = ", ".join(unique)[:1100]
     framing = "full-length full-body portrait, entire figure from head to toe, feet and shoes visible, standing pose, wide framing, detailed face"
-    positive = f"{style}, {framing}, stable distinctive features, {positive}{f', {accent} accents' if accent else ''}, simple dark background, no lettering"
+    mature_detail = f"adult subject, {body.strip()[:300]}, " if body and body.strip() else ""
+    positive = f"{style}, {framing}, {mature_detail}stable distinctive features, {positive}{f', {accent} accents' if accent else ''}, simple dark background, no lettering"
     negative = "text, watermark, frame, blurry face, distorted anatomy, extra limbs, gore, cropped head, cropped feet, close-up, headshot, cut off legs"
     if not mature:
         negative += ", nudity, sexualized pose"
