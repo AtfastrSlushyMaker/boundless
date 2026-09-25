@@ -54,8 +54,9 @@ def importance_for(character) -> str:
     return "MINOR"
 
 
-EXPLICIT_WORDS = re.compile(r"\b(?:nude|naked|topless|bottomless|nsfw|explicit|sexual|sexy|lingerie|undress\w*|bare (?:breasts?|chest|body)|"
+EXPLICIT_WORDS = re.compile(r"\b(?:nude|naked|topless|bottomless|unclothed|without clothes|nsfw|explicit|sexual|sexy|lingerie|undress\w*|bare (?:breasts?|chest|body)|"
                             r"breasts?|nipples?|genitals?|erotic|seductive|provocative)\b", re.IGNORECASE)
+NUDITY_WORDS = re.compile(r"\b(?:nude|naked|topless|bottomless|unclothed|undress\w*|bare breasts?|without clothes)\b", re.IGNORECASE)
 
 
 def mature_portrait_allowed(character, allow_mature: bool) -> bool:
@@ -63,7 +64,9 @@ def mature_portrait_allowed(character, allow_mature: bool) -> bool:
 
     attributes = character.attributes or {}
     visual = attributes.get("visual_identity") if isinstance(attributes.get("visual_identity"), dict) else {}
-    return allow_mature and not looks_minor(visual, character) and confirmed_adult(visual, character)
+    age_evidence = {**visual, "appearance": attributes.get("appearance", ""),
+                    "current_appearance": attributes.get("current_appearance", "")}
+    return allow_mature and not looks_minor(age_evidence, character) and confirmed_adult(age_evidence, character)
 
 
 def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple[str, str]:
@@ -72,7 +75,14 @@ def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple
     attributes = character.attributes or {}
     visual = attributes.get("visual_identity") if isinstance(attributes.get("visual_identity"), dict) else {}
     appearance = attributes.get("current_appearance") or attributes.get("appearance") or ""
+    if isinstance(appearance, dict):
+        appearance = ", ".join(str(value) for value in appearance.values() if isinstance(value, str))
+    mature = mature_portrait_allowed(character, allow_mature)
+    body = visual.get("body") if mature and isinstance(visual.get("body"), str) else ""
+    nude = mature and bool(NUDITY_WORDS.search(f"{body} {appearance}"))
     parts = [character.name, character.role]
+    if isinstance(appearance, str) and appearance.strip():
+        parts.append(appearance.strip()[:500])
     for key in ("species", "apparent_age", "gender_presentation", "build", "height", "skin", "face", "eyes", "hair"):
         value = visual.get(key) or attributes.get(key)
         if isinstance(value, str) and value.strip():
@@ -80,23 +90,13 @@ def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple
     features = visual.get("features")
     if isinstance(features, list):
         parts.extend(str(feature)[:120] for feature in features[:6] if isinstance(feature, str))
-    if isinstance(visual.get("clothing"), str) and visual["clothing"].strip():
+    if not nude and isinstance(visual.get("clothing"), str) and visual["clothing"].strip():
         parts.append(visual["clothing"].strip()[:200])
     state = str(visual.get("current_state") or "")
     if re.search(r"\b(?:wound|blood|bruis|torn|wet|soaked|dirt|mud|bandage|scar|burn|ash|tired|pale|sweat)", state, re.IGNORECASE):
         parts.append(state[:160])
-    minor = looks_minor(visual, character)
-    # The player's own "Appearance" text is always honored (it is what they asked for),
-    # except that sexual detail is stripped for anyone who may be under 18.
-    if isinstance(appearance, dict):
-        appearance = ", ".join(str(value) for value in appearance.values() if isinstance(value, str))
-    if isinstance(appearance, str) and appearance.strip():
-        text = appearance.strip()[:500]
-        if minor:
-            text = EXPLICIT_WORDS.sub("", text)
-        parts.append(text)
-    mature = mature_portrait_allowed(character, allow_mature)
-    body = visual.get("body") if mature and isinstance(visual.get("body"), str) else ""
+    minor = looks_minor({**visual, "appearance": appearance}, character)
+    # Keep the player's appearance details, including adult nudity when mature portraits are enabled.
     faction = attributes.get("faction") or attributes.get("faction_name")
     if isinstance(faction, str):
         parts.append(f"of {faction[:100]}")
@@ -106,11 +106,17 @@ def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple
     accent = str(theme.get("accent_family", ""))[:60]
     unique: list[str] = []
     for part in (str(part).strip() for part in parts if part):
+        if not mature:
+            part = EXPLICIT_WORDS.sub("", part).strip(" ,")
         if part and not any(part.casefold() in kept.casefold() for kept in unique):
             unique = [kept for kept in unique if kept.casefold() not in part.casefold()] + [part]
     positive = ", ".join(unique)[:1100]
-    framing = "full-length full-body portrait, entire figure from head to toe, feet and shoes visible, standing pose, wide framing, detailed face"
+    framing = "full-length full-body portrait, entire figure from head to toe, feet visible, wide framing, detailed face"
+    if not mature:
+        framing += ", standing pose, shoes visible"
     mature_detail = f"adult subject, {body.strip()[:300]}, " if body and body.strip() else ""
+    if nude:
+        mature_detail += "unobscured adult nudity, "
     positive = f"{style}, {framing}, {mature_detail}stable distinctive features, {positive}{f', {accent} accents' if accent else ''}, simple dark background, no lettering"
     negative = "text, watermark, frame, blurry face, distorted anatomy, extra limbs, gore, cropped head, cropped feet, close-up, headshot, cut off legs"
     if not mature:

@@ -258,10 +258,19 @@ def test_mature_portraits_are_opt_in_and_never_for_minors():
     assert "undressed" not in positive and "nudity" in negative
     positive, negative = portrait_prompt(adult, campaign(), allow_mature=True)
     assert "undressed to the waist" in positive and "nudity" not in negative
-    child = character(visual_identity={"apparent_age": "about 12", "adult": True, "body": "undressed"})
+    assert "shoes visible" not in positive and "standing pose" not in positive
+    nude_adult = character(visual_identity={"apparent_age": "early forties", "body": "nude",
+                                            "clothing": "old dark coat"}, current_appearance="naked")
+    positive, _ = portrait_prompt(nude_adult, campaign(), allow_mature=True)
+    assert "unobscured adult nudity" in positive and "old dark coat" not in positive
+    positive, negative = portrait_prompt(nude_adult, campaign())
+    assert "naked" not in positive and "nudity" in negative
+    child = character(visual_identity={"apparent_age": "about 12", "adult": True, "body": "undressed",
+                                       "clothing": "lingerie"})
     child.role = "street kid"
     positive, negative = portrait_prompt(child, campaign(), allow_mature=True)
-    assert "undressed" not in positive and "nudity" in negative and "sexual content" in negative
+    assert "undressed" not in positive and "lingerie" not in positive
+    assert "nudity" in negative and "sexual content" in negative
     assert mature_portrait_allowed(adult, True)
     assert not mature_portrait_allowed(child, True)
     assert not mature_portrait_allowed(adult, False)
@@ -271,6 +280,9 @@ def test_mature_portraits_are_opt_in_and_never_for_minors():
     assert "adult subject, undressed to the waist" in positive and "nudity" not in negative
     uncertain = character(visual_identity={"apparent_age": "unknown", "body": "undressed"})
     assert not mature_portrait_allowed(uncertain, True)
+    conflicting_age = character(visual_identity={"apparent_age": "early thirties", "body": "nude"},
+                                current_appearance="16-year-old")
+    assert not mature_portrait_allowed(conflicting_age, True)
 
 
 def test_existing_appearance_gets_mature_description_before_automatic_portrait():
