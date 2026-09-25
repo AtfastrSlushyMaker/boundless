@@ -13,7 +13,7 @@ import {
   ScrollText, Send, Settings2, Shield, Sparkles, StopCircle, Sun, Sunrise, Sunset, Users, X,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AtlasArtwork } from "@/components/AtlasArtwork";
+import { Mark, Spot } from "@/components/Art";
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
 import { CampaignHealth } from "@/components/CampaignHealth";
 import { GenerationProgress } from "@/components/GenerationProgress";
@@ -191,7 +191,7 @@ function SidebarContent({ panel, campaign, onRefreshSetup, refreshingSetup, refr
     </div>;
   }
   if (panel === "world") return <div className="lore-content world-sheet"><p className="lore-label">THE KNOWN WORLD</p><h2 className="lore-name">Places</h2>
-    <div className="world-sheet-map"><AtlasArtwork compact /><span>{campaign.current_location || "Where the story stands"}</span></div>
+    <div className="world-sheet-map"><span>{campaign.current_location || "Where the story stands"}</span></div>
     <p className="lore-copy">{campaign.locations.length} known {campaign.locations.length === 1 ? "place" : "places"}. The map is atmospheric; only recorded locations are listed below.</p>
     <ul className="world-place-list">{campaign.locations.map((place) => <li key={place.id}><strong>{place.name}</strong>{place.region && <span>{place.region}</span>}{place.description && <p>{place.description}</p>}</li>)}</ul>
     {!campaign.locations.length && <p className="lore-copy">Places will appear as you discover them.</p>}
@@ -455,7 +455,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
     ["notebook", "Notebook", NotebookPen],
   ] as const, []);
 
-  if (campaignQuery.isLoading) return <main className="game-loading"><span className="brand-glyph">B</span><p>Opening the archive…</p></main>;
+  if (campaignQuery.isLoading) return <main className="game-loading"><Mark size={44} className="is-pulsing" /><p>Opening the archive…</p></main>;
   if (campaignQuery.isError || !campaign) return <main className="game-load-error"><Link href="/" className="back-link"><ArrowLeft size={16} />Back to Boundless</Link><CircleAlert size={25} /><h1>This world could not be opened.</h1><p>{campaignQuery.error?.message ?? "Campaign not found."}</p><button className="quiet-button" onClick={() => void campaignQuery.refetch()}>Try again</button></main>;
 
   return (
@@ -465,7 +465,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
         <div className="game-brand-group">
           <button className="icon-button side-toggle desktop-only" onClick={() => setSidebarOpen(!sidebarOpen)} aria-label={sidebarOpen ? "Collapse campaign notes" : "Expand campaign notes"}>{sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</button>
           <button className="icon-button mobile-only" onClick={() => setMobileNavOpen(!mobileNavOpen)} aria-label="Open campaign notes">{mobileNavOpen ? <X size={18} /> : <Menu size={18} />}</button>
-          <Link href="/" className="brand-lockup"><span className="brand-glyph" aria-hidden="true">B</span><span>Boundless</span></Link>
+          <Link href="/" className="brand-lockup"><Mark size={28} /><span>Boundless</span></Link>
         </div>
         <div className="campaign-heading">
           <span className="campaign-title">{campaign.title}</span>
@@ -496,7 +496,6 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
       <div className={`game-body ${sidebarOpen ? "sidebar-is-open" : "sidebar-is-closed"}`}>
         <aside className={`campaign-rail ${mobileNavOpen ? "campaign-rail--mobile-open" : ""}`} aria-label="Campaign notes">
           <div className="rail-map">
-            <AtlasArtwork compact />
             <div className="rail-map-caption"><Map size={13} /><span>{campaign.current_location || "THE KNOWN WORLD"}</span></div>
           </div>
           <nav className="lore-nav" aria-label="Campaign information">
@@ -519,7 +518,7 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
             <div className="story-column-inner">
               {campaign.turns.length === 0 && !liveText && !generating && (
                 <div className="opening-state">
-                  <AtlasArtwork compact />
+                  <Spot name="first-scene" size={170} />
                   <p className="section-overline">THE PAGE IS WAITING</p>
                   <h1>{modelReady ? "The world is ready." : "Your world is saved."}</h1>
                   <p>{modelReady ? "The first scene will begin in a moment." : "Start your local model to bring its first scene to life."}</p>

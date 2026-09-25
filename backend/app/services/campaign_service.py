@@ -71,9 +71,20 @@ async def create_campaign(session: AsyncSession, payload: CampaignCreate) -> tup
                     "traits": constitution.traits, "history": constitution.history,
                     **constitution.starting_state.get("identity", {}),
                     **({"money": constitution.starting_state["money"]} if constitution.starting_state.get("money") else {})})
+    if payload.character_appearance and payload.character_appearance.strip():
+        player.attributes = {**player.attributes, "appearance": payload.character_appearance.strip()}
+        player.provenance = {**player.provenance, "appearance": "PLAYER_EXPLICIT"}
     session.add(player)
     await session.flush()
     await add_alias(session, player, player.name, "CANONICAL_NAME", turn_index=0, source="player_setup", confidence=1.0)
+    groups = [name.strip() for name in payload.character_affiliations if name and name.strip()]
+    if groups:
+        from app.services.affiliations import ensure_faction, normalize_affiliations
+        entries = normalize_affiliations(groups, source="player", turn_index=0)
+        for entry in entries:
+            faction = await ensure_faction(session, campaign, branch, entry["name"], kind=entry["kind"])
+            entry["name"], entry["kind"] = faction.name, faction.kind
+        player.attributes = {**player.attributes, "affiliations": entries}
     for entry in constitution.ability_catalogue:
         await gain_ability(session, player, entry, provenance="PLAYER_EXPLICIT", turn_index=0, source_default="campaign_setup")
     for goal in constitution.preferences[:5]:
@@ -95,6 +106,14 @@ async def create_campaign(session: AsyncSession, payload: CampaignCreate) -> tup
     if not await session.scalar(select(ModelProfile.id).where(ModelProfile.active.is_(True))):
         session.add(ModelProfile())
     await session.commit()
+    if payload.generate_portrait:
+        # Best effort: a portrait needs an enabled image provider; the world is created either way.
+        from app.services.portrait_jobs import enqueue_portrait
+        try:
+            await enqueue_portrait(session, campaign, player)
+            await session.commit()
+        except ValueError:
+            await session.rollback()
     await session.refresh(campaign)
     await session.refresh(branch)
     return campaign, branch

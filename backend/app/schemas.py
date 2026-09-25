@@ -17,6 +17,9 @@ class CampaignCreate(BaseModel):
     character_pronouns: Literal["he/him", "she/her", "they/them"] | None = None
     starting_money: int | None = Field(default=None, ge=0, le=1_000_000_000)
     money_currency: str | None = Field(default=None, max_length=40)
+    character_appearance: str | None = Field(default=None, max_length=1_000)
+    character_affiliations: list[str] = Field(default_factory=list, max_length=8)
+    generate_portrait: bool = False
 
     @model_validator(mode="after")
     def validate_money(self):

@@ -1096,3 +1096,215 @@ body,.game-shell,.game-topbar,.campaign-rail,.story-workspace,.action-dock,.lore
 .turn-editor-meta{margin-right:auto;color:var(--quiet);font-size:11px}
 .turn-editor-meta kbd{display:inline-block;min-width:16px;padding:1px 4px;margin:0 1px;border:1px solid var(--line);border-radius:4px;font:600 10px/1.3 var(--sans);text-align:center}
 @media(max-width:560px){.turn-editor-mode{grid-template-columns:1fr}.turn-editor-meta{display:none}}
+
+/* ═════ New world composer ═════ */
+.create-dialog.composer{width:min(100%,960px);max-height:min(92vh,860px);display:grid;grid-template-rows:auto auto minmax(0,1fr) auto auto;padding:0!important;overflow:hidden;border-radius:18px!important}
+.composer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:26px 30px 8px}
+.composer-head h2{margin:4px 0 0;font:normal clamp(30px,3.2vw,40px)/1.05 var(--serif);color:var(--ink)}
+.composer-steps{display:flex;gap:4px;padding:10px 30px 16px;border-bottom:1px solid var(--line)}
+.composer-steps button{display:inline-flex;align-items:center;gap:8px;min-height:32px;padding:0 12px 0 5px;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--quiet);font:600 12px/1 var(--sans);cursor:pointer}
+.composer-steps button span{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;border:1px solid var(--line-strong);font-size:11px}
+.composer-steps button:hover:not(:disabled){color:var(--ink)}
+.composer-steps button[aria-current=step]{border-color:color-mix(in srgb,var(--gold) 45%,var(--line));background:color-mix(in srgb,var(--gold) 10%,transparent);color:var(--ink)}
+.composer-steps button[aria-current=step] span{border-color:var(--gold);background:var(--gold);color:var(--on-accent)}
+.composer-steps button.is-done span{border-color:var(--gold);color:var(--gold)}
+.composer-steps button:disabled{opacity:.45;cursor:not-allowed}
+.composer-body{display:grid;grid-template-columns:minmax(0,1fr) 270px;min-height:0;overflow:hidden}
+.composer-main{min-height:0;overflow:auto;padding:22px 30px 24px;scrollbar-width:thin}
+.composer-pane{display:grid;gap:14px}
+.composer-label{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:0;color:var(--muted);font:600 12px/1.3 var(--sans)}
+.composer-label span{color:var(--quiet);font-weight:400;font-size:11.5px}
+.composer-premise{width:100%;min-height:210px;resize:vertical;padding:18px 20px;border:1px solid var(--line-strong);border-radius:14px;background:var(--field);color:var(--ink);font:normal 17px/1.65 var(--serif)}
+.composer-premise:focus,.composer-field input:focus,.composer-field select:focus,.composer-field textarea:focus,.develop-custom input:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px color-mix(in srgb,var(--gold) 16%,transparent)}
+.composer-premise::placeholder{color:var(--quiet);font-style:italic}
+.composer-hint{display:flex;align-items:center;gap:7px;margin:0 0 8px;color:var(--muted);font:600 11px/1.3 var(--sans);letter-spacing:.06em;text-transform:uppercase}
+.composer-hint svg{color:var(--gold)}
+.composer-hint span{color:var(--quiet);font-weight:400;letter-spacing:0;text-transform:none}
+.spark-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.spark{position:relative;display:grid;gap:5px;padding:12px 14px 13px 16px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);text-align:left;cursor:pointer;overflow:hidden;
+  transition:border-color .2s ease,transform .2s var(--ease-out)}
+.spark::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:2px;background:var(--gold)}
+.spark:hover{border-color:color-mix(in srgb,var(--gold) 50%,var(--line));transform:translateY(-1px)}
+.spark strong{font:normal 15px/1.2 var(--serif)}
+.spark span{color:var(--quiet);font:italic 12px/1.45 var(--serif)}
+.develop{display:grid;gap:8px}
+.develop-custom{display:flex;gap:6px;align-items:center}
+.develop-custom input{flex:1;min-height:34px;padding:0 12px;border:1px solid var(--line);border-radius:999px;background:var(--field);color:var(--ink);font:13px var(--sans)}
+.composer-note{margin:0;color:var(--quiet);font-size:12.5px;line-height:1.5}
+.composer-note strong{color:var(--ink)}
+.composer-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.composer-field{display:grid;gap:6px;align-content:start}
+.composer-field.is-wide{grid-column:1/-1}
+.composer-field>span{display:flex;align-items:baseline;justify-content:space-between;gap:10px;color:var(--muted);font:600 12px/1.3 var(--sans)}
+.composer-field>span small{color:var(--quiet);font-weight:400;font-size:11px}
+.composer-field input,.composer-field select,.composer-field textarea{width:100%;min-height:38px;padding:8px 11px;border:1px solid var(--line-strong);border-radius:9px;background:var(--field);color:var(--ink);font:13px/1.45 var(--sans)}
+.composer-field textarea{resize:vertical;font:italic 14px/1.55 var(--serif)}
+.composer-toggle{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;cursor:pointer}
+.composer-toggle input{accent-color:var(--gold);width:16px;height:16px}
+.composer-toggle svg{color:var(--gold)}
+.composer-toggle span{display:grid;gap:2px}
+.composer-toggle strong{font-size:13px}
+.composer-toggle small{color:var(--quiet);font-size:11.5px}
+.composer-toggle.is-off{opacity:.6;cursor:not-allowed}
+.mood-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:8px}
+.mood-swatch{position:relative;display:grid;gap:3px;min-height:92px;align-content:end;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);text-align:left;cursor:pointer;overflow:hidden;
+  transition:border-color .2s ease,box-shadow .2s ease,transform .2s var(--ease-out)}
+.mood-swatch-art{position:absolute;inset:0 0 auto;height:52px;background:linear-gradient(120deg,var(--night),color-mix(in srgb,var(--gold) 55%,var(--night)) 70%,var(--accent-2,var(--gold)));opacity:.9}
+.mood-swatch-art::after{content:"";position:absolute;inset:0;background:url('/ashen-reach-atlas.png') center / 420px auto;filter:var(--map-art-filter);opacity:.35;mix-blend-mode:overlay}
+.mood-swatch.is-auto .mood-swatch-art{background:repeating-linear-gradient(135deg,var(--paper) 0 8px,var(--surface-2) 8px 16px)}
+.mood-swatch strong,.mood-swatch small{position:relative}
+.mood-swatch strong{margin-top:48px;font:normal 14.5px/1.2 var(--serif)}
+.mood-swatch small{color:var(--quiet);font-size:11px;line-height:1.35}
+.mood-swatch:hover{transform:translateY(-1px);border-color:var(--line-strong)}
+.mood-swatch[aria-checked=true]{border-color:var(--gold);box-shadow:0 0 0 2px var(--gold)}
+.play-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.play-grid button{display:grid;gap:5px;justify-items:start;padding:14px;border:1px solid var(--line);border-radius:12px;background:transparent;color:var(--ink);text-align:left;cursor:pointer;transition:border-color .2s ease,background-color .2s ease}
+.play-grid button svg{color:var(--gold)}
+.play-grid strong{font:normal 16px/1.2 var(--serif)}
+.play-grid small{color:var(--quiet);font-size:12px;line-height:1.45}
+.play-grid button[aria-checked=true]{border-color:var(--gold);background:color-mix(in srgb,var(--gold) 9%,transparent)}
+.composer-summary{position:relative;display:grid;align-content:start;gap:10px;padding:24px 22px;border-left:1px solid var(--line);background:var(--night);color:var(--ink);overflow:auto;transition:background-color .5s ease}
+.composer-summary-art{position:absolute;inset:0 0 auto;height:140px;background:url('/ashen-reach-atlas.png') 60% 40% / 700px auto;filter:var(--map-art-filter);opacity:.35;
+  mask-image:linear-gradient(180deg,#000,transparent);-webkit-mask-image:linear-gradient(180deg,#000,transparent);pointer-events:none}
+.composer-summary>*{position:relative}
+.composer-summary .section-overline{margin:70px 0 0;color:var(--gold)}
+.composer-summary h3{margin:0;font:normal 24px/1.1 var(--serif)}
+.composer-summary-premise{margin:0;color:var(--muted);font:italic 13px/1.55 var(--serif);overflow-wrap:anywhere}
+.composer-summary dl{display:grid;gap:0;margin:6px 0 0}
+.composer-summary dl div{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:12px}
+.composer-summary dt{color:var(--quiet)}
+.composer-summary dd{margin:0;color:var(--ink);text-align:right}
+.composer-error{margin:0 30px 8px}
+.composer-foot{display:flex;align-items:center;gap:8px;padding:14px 30px;border-top:1px solid var(--line);background:var(--surface)}
+.composer-foot-hint{margin-right:auto;color:var(--quiet);font-size:11px}
+.composer-foot-hint kbd{display:inline-block;min-width:16px;padding:1px 4px;margin:0 1px;border:1px solid var(--line);border-radius:4px;font:600 10px/1.3 var(--sans);text-align:center}
+@media(max-width:860px){.composer-body{grid-template-columns:1fr}.composer-summary{display:none}.composer-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.composer-head,.composer-main,.composer-foot{padding-left:18px;padding-right:18px}.composer-steps{padding:8px 18px 12px;overflow-x:auto}
+  .composer-grid,.play-grid{grid-template-columns:1fr}.composer-foot-hint{display:none}}
+.create-dialog.composer .composer-premise{min-height:190px!important}
+.create-dialog.composer{background:var(--surface)!important;color:var(--ink);transition:background-color .5s ease}
+.composer-summary-art{height:150px}
+.composer-summary .section-overline{margin-top:84px}
+@media(max-height:760px){.create-dialog.composer .composer-premise{min-height:130px!important}}
+
+/* ═════ Illustrated art: each world family has its own plate (scene) and map ═════ */
+:root,[class*="theme-"]{--plate:url('/art/plates/neutral.webp');--map:url('/art/maps/neutral.webp')}
+:root[data-family=dark_fantasy],.theme-dark_fantasy{--plate:url('/art/plates/dark_fantasy.webp');--map:url('/art/maps/dark_fantasy.webp')}
+:root[data-family=horror],.theme-horror{--plate:url('/art/plates/horror.webp');--map:url('/art/maps/horror.webp')}
+:root[data-family=mystery],.theme-mystery{--plate:url('/art/plates/mystery.webp');--map:url('/art/maps/mystery.webp')}
+:root[data-family=romance],.theme-romance{--plate:url('/art/plates/romance.webp');--map:url('/art/maps/romance.webp')}
+:root[data-family=cozy],.theme-cozy{--plate:url('/art/plates/cozy.webp');--map:url('/art/maps/cozy.webp')}
+:root[data-family=survival],.theme-survival{--plate:url('/art/plates/survival.webp');--map:url('/art/maps/survival.webp')}
+:root[data-family=cyberpunk],.theme-cyberpunk{--plate:url('/art/plates/cyberpunk.webp');--map:url('/art/maps/cyberpunk.webp')}
+:root[data-family=sci_fi],.theme-sci_fi{--plate:url('/art/plates/sci_fi.webp');--map:url('/art/maps/sci_fi.webp')}
+:root[data-family=modern],.theme-modern{--plate:url('/art/plates/modern.webp');--map:url('/art/maps/modern.webp')}
+:root[data-family=neutral],.theme-neutral{--plate:url('/art/plates/neutral.webp');--map:url('/art/maps/neutral.webp')}
+/* The art carries its own colour now; only dim it for dark surfaces. */
+:root,:root [class*="theme-"],.home-topbar:not(.is-scrolled),.atlas-hero{--map-art-filter:brightness(.62) saturate(.9)}
+:root[data-scheme=light],:root[data-scheme=light] [class*="theme-"]{--map-art-filter:saturate(.85)}
+
+.atlas-hero{background:#07090a}
+.hero-art{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:62% 40%;animation:hero-drift 40s ease-in-out infinite alternate}
+@keyframes hero-drift{from{transform:scale(1.02) translate3d(0,0,0)}to{transform:scale(1.08) translate3d(-1.2%,-.6%,0)}}
+@media(prefers-reduced-motion:reduce){.hero-art{animation:none}}
+.atlas-hero:after{background:linear-gradient(90deg,#06080af2 0%,#06080ac0 30%,#06080a30 62%,transparent 80%),linear-gradient(0deg,#06080ad9 0%,transparent 34%)!important}
+
+.game-shell .rail-map::before{background:var(--map) 50% 45% / 150% auto no-repeat;filter:var(--map-art-filter);opacity:1}
+.rail-map .atlas-art{display:none}
+.people-map-art{background:var(--map) center / cover no-repeat}
+.people-graph-viewport::before{background-image:var(--map)!important;opacity:.55}
+:root[data-scheme=light] .people-graph-viewport::before{opacity:.6}
+.graph-launch::after{background:var(--map) 70% 40% / 460px auto no-repeat;opacity:.3}
+.world-feature-art{background:var(--plate) 60% 50% / cover no-repeat;filter:none;opacity:.9}
+:root[data-scheme=light] .world-feature-art{opacity:1}
+.world-sheet-map{background:var(--map) center / cover no-repeat}
+.world-sheet-map .atlas-art{display:none}
+.world-sheet-map::before{content:"";position:absolute;inset:0;background:inherit;filter:var(--map-art-filter)}
+
+/* Ink vignettes: black ink on white; multiplied on paper, inverted into light ink at night. */
+.spot{display:block;width:var(--spot-size,140px);height:auto;margin:0 auto;mix-blend-mode:multiply;opacity:.85;user-select:none;pointer-events:none}
+:root:not([data-scheme=light]) .spot{filter:invert(1) sepia(.35) hue-rotate(-10deg) brightness(.92);mix-blend-mode:screen;opacity:.7}
+.emblem{display:block;width:100%;height:100%;object-fit:contain;user-select:none;pointer-events:none}
+:root:not([data-scheme=light]) .emblem{filter:invert(1) sepia(.5) saturate(1.4) hue-rotate(-12deg) brightness(.95)}
+
+/* Art placements */
+.brand-mark{display:block;flex:none;object-fit:contain}
+:root:not([data-scheme=light]) .brand-mark,.home-topbar:not(.is-scrolled) .brand-mark{filter:invert(1) sepia(.6) saturate(1.6) hue-rotate(-8deg) brightness(.92)}
+.brand-lockup{gap:10px}
+.brand-mark.is-pulsing{animation:mark-breathe 1.8s ease-in-out infinite}
+@keyframes mark-breathe{50%{opacity:.45;transform:scale(.96)}}
+.empty-card .spot{margin-bottom:4px}
+.empty-card p{max-width:34ch}
+.empty-worlds{display:grid!important;justify-items:center;gap:10px;text-align:center}
+.opening-state .spot{margin-bottom:6px}
+.person-portrait.is-empty{background:color-mix(in srgb,var(--ink) 5%,var(--surface))!important;overflow:hidden}
+.person-portrait.is-empty .spot{width:84%;opacity:.8}
+.faction-icon{width:36px!important;height:36px!important;padding:3px;border-radius:50%!important;background:color-mix(in srgb,var(--ink) 6%,transparent)!important}
+.faction-card.is-loose .faction-icon{padding:0}
+.group-chip{padding-left:3px}
+.group-chip-seal{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:color-mix(in srgb,var(--ink) 6%,transparent);padding:1px}
+.graph-empty{position:absolute;left:50%;top:50%;z-index:2;display:grid;justify-items:center;gap:8px;max-width:280px;transform:translate(-50%,-10%);text-align:center;color:var(--muted);font-size:12.5px;line-height:1.5;pointer-events:none}
+.graph-empty p{margin:0}
+.generation-skeleton{position:relative}
+.generation-spot{position:absolute;right:0;top:-6px;--spot-size:84px;opacity:.55}
+
+/* Ledger plate thumbnail */
+.ledger-row{grid-template-columns:44px 96px minmax(0,1fr) 92px 64px}
+.ledger-plate{align-self:start;width:96px;height:64px;margin-top:4px;border-radius:8px;background-size:cover;background-position:center;box-shadow:0 0 0 1px var(--line);
+  filter:saturate(.8) brightness(.9);transition:filter .3s ease,transform .3s var(--ease-out)}
+.ledger-row:hover .ledger-plate{filter:none;transform:scale(1.04)}
+@media(max-width:760px){.ledger-row{grid-template-columns:72px minmax(0,1fr) auto}.ledger-plate{width:72px;height:52px;grid-row:1/3}.ledger-main{grid-column:2}.ledger-meta{grid-column:2}.ledger-actions{grid-column:3;grid-row:1}}
+
+/* Composer: real art */
+.spark-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:10px!important}
+.spark{aspect-ratio:3/4;min-height:0!important;align-content:end!important;padding:14px!important;border:0!important;background-size:cover;background-position:center;color:#f4efe4!important;
+  box-shadow:0 0 0 1px var(--line),0 8px 24px var(--shadow);transition:transform .3s var(--ease-out),box-shadow .3s ease!important}
+.spark::before{display:none}
+.spark-shade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 35%,#050607e6 92%);transition:opacity .3s ease}
+.spark strong,.spark em{position:relative}
+.spark strong{font:normal 17px/1.15 var(--serif)!important;text-shadow:0 1px 3px #000}
+.spark em{color:#e9dcc0;font:600 9.5px/1 var(--sans);font-style:normal;letter-spacing:.12em;text-transform:uppercase;opacity:.8}
+.spark:hover{transform:translateY(-3px);box-shadow:0 0 0 1px var(--gold),0 14px 30px var(--shadow)}
+.mood-swatch{min-height:124px!important;padding:0!important;align-content:end!important;gap:0!important}
+.mood-swatch-art{height:100%!important;inset:0!important;background-size:cover!important;background-position:center!important;opacity:1!important;transition:transform .4s var(--ease-out)}
+.mood-swatch-art::after{display:none}
+.mood-swatch::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 30%,#050607e0 95%)}
+.mood-swatch strong,.mood-swatch small{z-index:1;padding:0 12px;color:#f4efe4!important}
+.mood-swatch strong{margin-top:0!important}
+.mood-swatch small{padding-bottom:11px;color:#e3dccd!important;opacity:.8}
+.mood-swatch:hover .mood-swatch-art{transform:scale(1.05)}
+.mood-swatch.is-auto::after{background:linear-gradient(180deg,transparent 20%,color-mix(in srgb,var(--night) 90%,transparent))}
+.mood-swatch.is-auto strong,.mood-swatch.is-auto small{color:var(--ink)!important}
+.composer-summary-art{height:180px!important;background-size:cover!important;background-position:center!important;opacity:.95!important;filter:none!important;
+  mask-image:linear-gradient(180deg,#000 55%,transparent);-webkit-mask-image:linear-gradient(180deg,#000 55%,transparent);transition:background-image .4s ease}
+.composer-summary .section-overline{margin-top:150px!important}
+@media(max-width:560px){.spark-grid{grid-template-columns:1fr 1fr!important}}
+
+/* Paper in light mode, grain at night */
+.story-workspace::after,.worlds-section::after{content:"";position:absolute;inset:0;z-index:0;pointer-events:none;background:url('/art/textures/grain.webp') 0 0 / 256px;opacity:.05;mix-blend-mode:overlay}
+:root[data-scheme=light] .story-workspace::after,:root[data-scheme=light] .worlds-section::after{background:url('/art/textures/paper.webp') 0 0 / 640px;opacity:.09;mix-blend-mode:multiply}
+.worlds-section{position:relative;isolation:isolate}
+.worlds-section>*{position:relative;z-index:1}
+.composer-summary>.composer-summary-art{position:absolute;inset:0 0 auto 0;height:210px!important}
+.composer-summary .section-overline{margin-top:160px!important}
+.spark{aspect-ratio:4/3!important;background-position:center 30%!important}
+.spark strong{font-size:15.5px!important}
+
+/* Spots are transparent ink now: no blend modes, just invert the ink at night. */
+.spot{mix-blend-mode:normal!important;opacity:.8}
+:root:not([data-scheme=light]) .spot{filter:invert(1) sepia(.25) brightness(.9)!important;mix-blend-mode:normal!important;opacity:.75}
+/* Graph: a quiet note under the toolbar instead of a box over the nodes. */
+.graph-empty{top:14px!important;transform:translateX(-50%)!important;grid-auto-flow:column;align-items:center;gap:10px!important;max-width:min(420px,90%)!important;padding:8px 14px 8px 8px;
+  border:1px solid var(--line);border-radius:999px;background:color-mix(in srgb,var(--surface) 88%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);text-align:left!important;font-size:12px!important}
+.graph-empty .spot{--spot-size:40px;width:40px;margin:0}
+/* The graph column never spills under the details panel. */
+@media(min-width:921px){.people-graph-layout{grid-template-columns:clamp(190px,18vw,230px) minmax(0,1fr) clamp(260px,24vw,320px)}}
+.people-graph-main{min-width:0;overflow:hidden;position:relative}
+.people-graph-inspector,.people-inspector{position:relative;z-index:2;background:var(--surface)}
+.people-graph-tools{flex-wrap:wrap;row-gap:6px;min-width:0}
+.people-graph-tools select{max-width:190px}
+.person-portrait.is-empty .spot{display:none}
+.generation-clock{display:inline-flex;align-items:center;gap:8px}
+.generation-hourglass{--spot-size:26px;width:26px;margin:0;opacity:.8;animation:hourglass-breathe 2.4s ease-in-out infinite}
+@keyframes hourglass-breathe{50%{opacity:.4}}
+@media(prefers-reduced-motion:reduce){.generation-hourglass{animation:none}}

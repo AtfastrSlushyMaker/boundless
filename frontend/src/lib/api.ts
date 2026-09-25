@@ -8,6 +8,9 @@ export type CharacterSetup = {
   character_pronouns?: "he/him" | "she/her" | "they/them";
   starting_money?: number;
   money_currency?: string;
+  character_appearance?: string;
+  character_affiliations?: string[];
+  generate_portrait?: boolean;
 };
 
 export type Theme = {

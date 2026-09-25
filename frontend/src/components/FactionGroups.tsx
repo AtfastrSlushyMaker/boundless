@@ -1,15 +1,11 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Building2, Castle, ChevronDown, Church, Coins, Crown, Flag, Landmark, LoaderCircle, Shield, Swords, Users, Wand2 } from "lucide-react";
+import { ChevronDown, LoaderCircle, Users, Wand2 } from "lucide-react";
+import { Emblem, Spot } from "@/components/Art";
 import { useState } from "react";
 import type { Character, Faction } from "@/lib/api";
 import { Group, KIND_LABEL, Stance } from "@/lib/people";
-
-const KIND_ICON: Record<string, typeof Flag> = {
-  faction: Flag, nation: Crown, city: Building2, guild: Coins, religion: Church, house: Castle, military: Swords,
-  government: Landmark, crew: Users,
-};
 
 /** People grouped by faction, nation, guild, faith and so on; each group opens to its members. */
 export function FactionGroups({ groups, selectedId, onSelect, stanceOf, onRegroup, regrouping, compact = false }: {
@@ -26,15 +22,14 @@ export function FactionGroups({ groups, selectedId, onSelect, stanceOf, onRegrou
         title="Read the story again and regroup people into factions, nations, guilds and crews">
         {regrouping ? <LoaderCircle size={13} className="spin" /> : <Wand2 size={13} />}{regrouping ? "Regrouping…" : "Regroup from story"}</button>
     </div>}
-    {!named.length && <p className="empty-card">No one has a known faction, nation, guild or faith yet. Regroup from the story, or add groups under Edit character details.</p>}
+    {!named.length && <div className="empty-card"><Spot name="no-groups" size={120} /><p>No one has a known faction, nation, guild or faith yet. Regroup from the story, or add groups under Edit character details.</p></div>}
     {groups.map((group) => {
       const id = group.faction?.id ?? "unaffiliated";
       const expanded = open[id] ?? (compact ? false : groups.length <= 3);
-      const Icon = group.faction ? KIND_ICON[group.faction.kind] ?? Shield : Users;
       const leaders = group.members.filter((member) => member.status === "leader").map((member) => member.person.name);
       return <section key={id} className={`faction-card${group.faction ? "" : " is-loose"}`} data-kind={group.faction?.kind ?? "none"}>
         <button type="button" className="faction-card-head" aria-expanded={expanded} onClick={() => setOpen({ ...open, [id]: !expanded })}>
-          <span className="faction-icon" aria-hidden="true"><Icon size={15} /></span>
+          <span className="faction-icon" aria-hidden="true">{group.faction ? <Emblem kind={group.faction.kind} /> : <Users size={15} />}</span>
           <span className="faction-title"><strong>{group.faction?.name ?? "No known group"}</strong>
             <small>{group.faction ? KIND_LABEL[group.faction.kind] ?? "Group" : "Unaffiliated"} · {group.members.length}
               {leaders.length ? ` · led by ${leaders.join(", ")}` : ""}</small></span>

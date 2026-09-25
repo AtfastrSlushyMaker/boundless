@@ -117,3 +117,16 @@ async def test_regroup_can_remove_a_wrong_story_membership_but_not_a_player_one(
     response = await client.post(f"/api/campaigns/{campaign['id']}/factions/sync", params={"branch_id": campaign["branch"]["id"]})
     groups = [entry["name"] for entry in next(row for row in response.json()["campaign"]["characters"] if row["name"] == "Tam")["attributes"]["affiliations"]]
     assert groups == ["Harbor Watch", "Salt Guild"], "player-set groups survive the model's corrections"
+
+
+@pytest.mark.asyncio
+async def test_new_world_can_start_with_appearance_and_groups(client, scripted):
+    campaign = await new_campaign(client, "My name is Ada, a courier in the harbor city of Ost.",
+                                  character_appearance="Tall, weathered, a courier's satchel across one shoulder.",
+                                  character_affiliations=["Couriers' Guild", "Kingdom of Ost"], generate_portrait=True)
+    state = await detail(client, campaign)
+    ada = next(row for row in state["characters"] if row["name"] == "Ada")
+    assert ada["attributes"]["appearance"].startswith("Tall, weathered")
+    assert [(entry["name"], entry["source"]) for entry in ada["attributes"]["affiliations"]] == [("Couriers' Guild", "player"), ("Kingdom of Ost", "player")]
+    kinds = {row["name"]: row["kind"] for row in state["factions"]}
+    assert kinds == {"Couriers' Guild": "guild", "Kingdom of Ost": "nation"}

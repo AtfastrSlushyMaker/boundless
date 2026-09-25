@@ -4,9 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
-import { Archive, ArrowDownLeft, ArrowUpRight, BookOpenText, Check, CircleAlert, Command, Import, LoaderCircle, Plus, Search, Settings2, WifiOff } from "lucide-react";
+import { Archive, ArrowDownLeft, ArrowUpRight, Check, CircleAlert, Command, Import, LoaderCircle, Plus, Search, Settings2, WifiOff } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { AtlasArtwork } from "@/components/AtlasArtwork";
+import { Mark, plateUrl, Spot } from "@/components/Art";
 import { CreateWorldDialog } from "@/components/CreateWorldDialog";
 import { ModelSettingsDialog } from "@/components/ModelSettingsDialog";
 import { SchemeToggle } from "@/components/SchemeToggle";
@@ -133,7 +133,7 @@ export default function HomePage() {
     <main className="home-shell theme-dark_fantasy">
       <header className={`topbar home-topbar${scrolled ? " is-scrolled" : ""}`}>
         <Link href="/" className="brand-lockup" aria-label="Boundless home">
-          <span className="brand-glyph" aria-hidden="true">B</span><span>Boundless</span>
+          <Mark size={30} /><span>Boundless</span>
         </Link>
         <nav className="home-navigation" aria-label="Home navigation"><a href="#worlds">Your worlds</a></nav>
         <div className="topbar-right">
@@ -147,7 +147,8 @@ export default function HomePage() {
       </header>
 
       <section className="atlas-hero" aria-labelledby="home-title">
-        <AtlasArtwork />
+        {/* eslint-disable-next-line @next/next/no-img-element -- full-bleed static hero */}
+        <img className="hero-art" src="/art/hero.webp" alt="" aria-hidden="true" fetchPriority="high" />
         <div className="hero-coastline">
           <div className="hero-copy">
             <h1 id="home-title">A world that<br /><em>answers back.</em></h1>
@@ -177,7 +178,7 @@ export default function HomePage() {
         {importError && <p className="notice-line notice-line--error" role="alert"><CircleAlert size={14} />{importError}</p>}
         {worlds.isLoading && <div className="loading-line"><LoaderCircle className="spin" size={16} />Opening your archive…</div>}
         {worlds.isError && <div className="service-note" role="alert"><WifiOff size={18} /><div><strong>Campaign storage is unreachable.</strong><p>Start PostgreSQL with <code>docker compose up -d --wait</code>, then refresh this page.</p></div></div>}
-        {worlds.data?.length === 0 && <div className="empty-worlds"><BookOpenText size={19} /><p>{showArchived ? "No archived worlds." : "No worlds yet. The first sentence is yours."}</p><button className="btn btn--primary" onClick={() => setCreateOpen(true)}>Begin a world <ArrowUpRight size={14} /></button></div>}
+        {worlds.data?.length === 0 && <div className="empty-worlds"><Spot name="no-worlds" size={150} /><p>{showArchived ? "No archived worlds." : "No worlds yet. The first sentence is yours."}</p><button className="btn btn--primary" onClick={() => setCreateOpen(true)}>Begin a world <ArrowUpRight size={14} /></button></div>}
         {!!worlds.data?.length && (() => {
           const query = worldSearch.trim().toLocaleLowerCase();
           const shown = worlds.data.filter((campaign) => !query || `${worldTitle(campaign)} ${campaign.premise} ${campaign.protagonist_name} ${campaign.genre} ${campaign.current_location}`
@@ -212,6 +213,7 @@ export default function HomePage() {
                   initial={{ opacity: 0, y: reduceMotion ? 0 : 6 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: reduceMotion ? 0 : 0.25, delay: reduceMotion ? 0 : Math.min(index * 0.03, 0.3), ease: "easeOut" }}>
                   <span className="ledger-index">{String(index + 1).padStart(2, "0")}</span>
+                  <span className="ledger-plate" aria-hidden="true" style={{ backgroundImage: `url(${plateUrl(campaign.theme?.family)})` }} />
                   <div className="ledger-main">
                     <h3><Link href={href(campaign)}>{worldTitle(campaign)}</Link>{campaign.archived && <small>Archived</small>}</h3>
                     <p className="world-excerpt">{excerpt(campaign.premise)}</p>

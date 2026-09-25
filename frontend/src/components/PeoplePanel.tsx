@@ -6,6 +6,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { faceCrop, PortraitButton } from "@/components/PortraitLightbox";
+import { Emblem, Spot } from "@/components/Art";
 import { FactionGroups } from "@/components/FactionGroups";
 import { Pager, usePaged } from "@/components/Pager";
 import { affiliationsOf, groupPeople, KIND_LABEL, stanceFor } from "@/lib/people";
@@ -356,7 +357,7 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
       {affiliationsOf(selected).map((entry) => <button type="button" key={entry.name} className={`group-chip${entry.status === "former" ? " is-former" : ""}`}
         data-kind={entry.kind} onClick={() => { setPeopleFilter("factions"); setSearch(entry.name); }}
         title={`${KIND_LABEL[entry.kind] ?? "Group"}${entry.role ? ` · ${entry.role}` : ""}${entry.status === "former" ? " · former" : ""}`}>
-        <small>{KIND_LABEL[entry.kind] ?? "Group"}</small>{entry.name}{entry.status === "leader" && <em>leader</em>}{entry.status === "former" && <em>former</em>}</button>)}
+        <span className="group-chip-seal"><Emblem kind={entry.kind} /></span>{entry.name}{entry.status === "leader" && <em>leader</em>}{entry.status === "former" && <em>former</em>}</button>)}
     </div>}
     <div className="portrait-controls">
       {(imageProvider === "comfyui" || imageProvider === "ai_horde") && <button type="button" className="portrait-action" onClick={() => void generateAvatar(Boolean(avatarUrl))} disabled={requestingAvatar || Boolean(pendingAvatarJob)}>{requestingAvatar ? "Requesting…" : pendingAvatarJob ? "Portrait generating…" : avatarUrl ? "Regenerate portrait" : "Generate portrait"}</button>}
@@ -463,7 +464,7 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
         <RefreshCw size={13} className={rebuilding ? "spin" : undefined} />{rebuilding ? "Reading the story…" : rebuilt ? "People refreshed" : "Recover people from story"}
       </button>
     </div>
-    {!people.length && <p className="lore-copy">No individual has entered the record yet. Recover people from the story to scan earlier scenes.</p>}
+    {!people.length && <div className="empty-card"><Spot name="no-people" size={130} /><p>No one has entered the record yet. Recover people from the story to scan earlier scenes.</p></div>}
     {!!people.length && <div className="people-list-tools">
       <input type="search" className="panel-search" value={search} onChange={(event) => setSearch(event.target.value)}
         placeholder="Search name, role, alias or group" aria-label="Search people" />
@@ -536,7 +537,8 @@ export function PeoplePanel({ campaign, onReindex, rebuilding, rebuilt, onRefres
             <RelationshipGraph people={graphPeople} relationships={relationships} protagonistName={campaign.protagonist_name}
               selectedId={focused ? selected?.id ?? null : null} selectedEdgeId={selectedEdgeId} importanceOf={importanceOf}
               edgeStyle={edgeStyle} onSelectPerson={choosePerson} onSelectEdge={setSelectedEdgeId} layoutKey={layoutKey}
-              reduceMotion={Boolean(reduceMotion)} />
+              reduceMotion={Boolean(reduceMotion)}
+              filtered={relationshipFilter !== "all" || groupFilter !== "all" || peopleFilter !== "all" || Boolean(search.trim())} />
             <p className="people-graph-note">{graphPeople.length} people · {relationships.length} connections{!showBackground && backgroundCount ? ` · ${backgroundCount} background hidden` : ""}. Drag anyone and their connections follow · hover to trace a web · pinch or ⌘-scroll to zoom · click a line for its history.</p>
           </main>
           <aside className="people-inspector" aria-label="Selected person details">

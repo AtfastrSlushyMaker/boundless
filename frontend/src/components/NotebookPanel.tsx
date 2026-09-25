@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Lightbulb, ListTodo, NotebookPen, Pin, PinOff, Plus, Quote, Search, Trash2, X } from "lucide-react";
 import { FormEvent, useState } from "react";
+import { Spot } from "@/components/Art";
 import { Pager, usePaged } from "@/components/Pager";
 import { api, CampaignDetail, CampaignNote, NoteTag } from "@/lib/api";
 
@@ -77,7 +78,7 @@ export function NotebookPanel({ campaign }: { campaign: CampaignDetail }) {
       </div>
     </div>
     {notes.isLoading && <p className="lore-copy">Opening your notebook…</p>}
-    {notes.isSuccess && !visible.length && <div className="empty-card"><NotebookPen size={20} /><p>{notes.data.notes.length
+    {notes.isSuccess && !visible.length && <div className="empty-card"><Spot name="notebook-empty" size={130} /><p>{notes.data.notes.length
       ? "No notes match." : "Nothing written yet. Add a note, or use Save on any passage in the story."}</p></div>}
     <ul className="note-list">
       <AnimatePresence initial={false}>

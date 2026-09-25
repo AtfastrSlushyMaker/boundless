@@ -3,6 +3,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Check, Feather, ScrollText, Search, StopCircle } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Spot } from "@/components/Art";
 
 export type GenerationStage = "reading" | "writing" | "interpreting";
 
@@ -46,7 +47,8 @@ export function GenerationProgress({ stage, hasText, onStop }: { stage: Generati
         </li>;
       })}
     </ol>
-    <div className="generation-meta"><span className="generation-clock" aria-label={`Elapsed ${clock}`}>{clock}</span>
+    <div className="generation-meta"><span className="generation-clock" aria-label={`Elapsed ${clock}`}>
+      <Spot name="generating" size={26} className="generation-hourglass" />{clock}</span>
       <button type="button" className="generation-stop" onClick={onStop}><StopCircle size={14} />Stop</button></div>
     <AnimatePresence>{!hasText && <motion.div key="skeleton" className="generation-skeleton" aria-hidden="true"
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, height: 0 }}>

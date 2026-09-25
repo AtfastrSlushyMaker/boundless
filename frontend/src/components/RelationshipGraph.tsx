@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { Maximize2, Minus, Plus, Shuffle } from "lucide-react";
 import { PointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Spot } from "@/components/Art";
 import { faceCrop } from "@/components/PortraitLightbox";
 import { portraitUrl } from "@/lib/api";
 import type { Character, Importance, Relationship } from "@/lib/api";
@@ -22,6 +23,7 @@ type Props = {
   onSelectEdge: (id: string) => void;
   layoutKey: string;
   reduceMotion: boolean;
+  filtered?: boolean;
 };
 
 const RADIUS: Record<Importance, number> = { COMPANION: 27, MAJOR: 25, RECURRING: 21, MINOR: 17, BACKGROUND: 13 };
@@ -32,7 +34,7 @@ type Camera = { x: number; y: number; k: number };
 
 /** A live, force-directed relationship graph: drag people and their connections follow. */
 export function RelationshipGraph({ people, relationships, protagonistName, selectedId, selectedEdgeId, importanceOf, edgeStyle,
-  onSelectPerson, onSelectEdge, layoutKey, reduceMotion }: Props) {
+  onSelectPerson, onSelectEdge, layoutKey, reduceMotion, filtered = false }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -357,6 +359,8 @@ export function RelationshipGraph({ people, relationships, protagonistName, sele
         })}
       </div>
     </div>
+    {!edges.length && <div className="graph-empty"><Spot name="graph-empty" size={40} />
+      <p>{filtered ? "No connections match these filters." : "No connections recorded yet. They appear as people trust, fear, or clash with each other."}</p></div>}
     <div className="graph-controls" aria-label="Graph view">
       <button type="button" aria-label="Zoom out" disabled={zoom <= MIN_ZOOM} onClick={() => zoomAt(cameraRef.current.k / 1.25)}><Minus size={14} /></button>
       <span aria-live="polite">{Math.round(zoom * 100)}%</span>
