@@ -283,6 +283,8 @@ def test_mature_portraits_are_opt_in_and_never_for_minors():
     conflicting_age = character(visual_identity={"apparent_age": "early thirties", "body": "nude"},
                                 current_appearance="16-year-old")
     assert not mature_portrait_allowed(conflicting_age, True)
+    conflicting_age.attributes["current_appearance"] = {"description": "16-year-old"}
+    assert not mature_portrait_allowed(conflicting_age, True)
 
 
 def test_existing_appearance_gets_mature_description_before_automatic_portrait():

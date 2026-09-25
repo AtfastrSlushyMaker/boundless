@@ -64,8 +64,8 @@ def mature_portrait_allowed(character, allow_mature: bool) -> bool:
 
     attributes = character.attributes or {}
     visual = attributes.get("visual_identity") if isinstance(attributes.get("visual_identity"), dict) else {}
-    age_evidence = {**visual, "appearance": attributes.get("appearance", ""),
-                    "current_appearance": attributes.get("current_appearance", "")}
+    age_evidence = {**visual, "appearance": str(attributes.get("appearance", "")),
+                    "current_appearance": str(attributes.get("current_appearance", ""))}
     return allow_mature and not looks_minor(age_evidence, character) and confirmed_adult(age_evidence, character)
 
 
@@ -81,6 +81,7 @@ def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple
     body = visual.get("body") if mature and isinstance(visual.get("body"), str) else ""
     nude = mature and bool(NUDITY_WORDS.search(f"{body} {appearance}"))
     parts = [character.name, character.role]
+    # Keep the player's appearance details, including adult nudity when mature portraits are enabled.
     if isinstance(appearance, str) and appearance.strip():
         parts.append(appearance.strip()[:500])
     for key in ("species", "apparent_age", "gender_presentation", "build", "height", "skin", "face", "eyes", "hair"):
@@ -96,7 +97,6 @@ def portrait_prompt(character, campaign, *, allow_mature: bool = False) -> tuple
     if re.search(r"\b(?:wound|blood|bruis|torn|wet|soaked|dirt|mud|bandage|scar|burn|ash|tired|pale|sweat)", state, re.IGNORECASE):
         parts.append(state[:160])
     minor = looks_minor({**visual, "appearance": appearance}, character)
-    # Keep the player's appearance details, including adult nudity when mature portraits are enabled.
     faction = attributes.get("faction") or attributes.get("faction_name")
     if isinstance(faction, str):
         parts.append(f"of {faction[:100]}")
