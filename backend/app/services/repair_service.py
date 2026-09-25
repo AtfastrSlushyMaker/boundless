@@ -114,10 +114,17 @@ async def _reveal_pairs(turns: list[Turn], characters: list[Character]) -> list[
     return pairs
 
 
+def _story_order(row: Character) -> tuple:
+    """Earliest-seen first. Merges run in this order, so the first spelling the story used survives."""
+    return (row.first_seen_turn_index is None, row.first_seen_turn_index or 0, row.name.casefold(), str(row.id))
+
+
 async def analyze_campaign(session: AsyncSession, campaign: Campaign, branch: Branch) -> dict[str, Any]:
     await ensure_identity_rows(session, branch.id)
     await session.flush()
-    characters = list((await session.scalars(select(Character).where(Character.branch_id == branch.id))).all())
+    # Stable order: the database returns rows in no particular order, and which duplicate is kept,
+    # which spelling becomes the alias, and how ties break all depend on it.
+    characters = sorted((await session.scalars(select(Character).where(Character.branch_id == branch.id))).all(), key=_story_order)
     player_key = normalize_reference(campaign.protagonist_name)
     people = [row for row in characters if normalize_reference(row.name) != player_key]
     player = next((row for row in characters if normalize_reference(row.name) == player_key), None)
@@ -232,7 +239,8 @@ async def analyze_campaign(session: AsyncSession, campaign: Campaign, branch: Br
         findings.append(_finding(
             "DUPLICATE_CHARACTER", "HIGH",
             f"{', '.join(repr(row.name) for row in rows if row.id != target.id)} → {target.name}",
-            evidence, {"target_id": str(target.id), "source_ids": [str(row.id) for row in rows if row.id != target.id]},
+            evidence, {"target_id": str(target.id),
+                       "source_ids": [str(row.id) for row in sorted(rows, key=_story_order) if row.id != target.id]},
             *sorted(members)))
     for source, target, confidence, evidence in edges:
         if confidence == "PROBABLE" and find(source) != find(target):
