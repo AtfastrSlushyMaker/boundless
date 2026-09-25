@@ -118,6 +118,44 @@ def test_hosted_detection():
     assert is_hosted("openai-compatible", "https://api.example.com/v1")
 
 
+def test_mac_docker_maps_ollama_loopback_without_changing_explicit_endpoints(monkeypatch):
+    from app.core.config import settings
+    from app.llm import gateway
+
+    monkeypatch.setattr(gateway.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(settings, "host_mlx_supported", True)
+    assert gateway.ollama_base_url("http://127.0.0.1:11434") == "http://host.docker.internal:11434"
+    assert gateway.ollama_base_url("http://localhost:11435") == "http://host.docker.internal:11435"
+    assert gateway.ollama_base_url("http://host.docker.internal:11434") == "http://host.docker.internal:11434"
+    monkeypatch.setattr(settings, "host_mlx_supported", False)
+    assert gateway.ollama_base_url("http://127.0.0.1:11434") == "http://127.0.0.1:11434"
+
+
+@pytest.mark.asyncio
+async def test_health_reports_state_and_inherited_summary_offline(client, clean_roles, monkeypatch):
+    from app.api import routes
+
+    class OfflineState(ScriptedModel):
+        async def health(self):
+            return {"status": "offline", "model": self.name, "detail": "State model unavailable"}
+
+    narrator, state = ScriptedModel("narrator"), OfflineState("local-state")
+    monkeypatch.setattr(routes, "provider_for_profile",
+                        lambda profile: state if profile and profile.role == "state" else narrator)
+    response = await client.put("/api/settings/roles", json={"roles": [
+        {"role": "state", "inherit": False, "provider": "ollama", "base_url": "http://127.0.0.1:11434",
+         "model": "local-state"},
+    ], "hosted_fallback_enabled": False})
+    assert response.status_code == 200
+    health = (await client.get("/api/health")).json()
+    assert health["status"] == "degraded"
+    assert health["model"]["status"] == "connected"
+    assert health["roles"]["narrator"]["status"] == "connected"
+    assert health["roles"]["state"]["status"] == "offline"
+    assert health["roles"]["summary"]["status"] == "offline"
+    assert health["roles"]["summary"]["source_role"] == "state"
+
+
 @pytest.mark.asyncio
 async def test_relationship_repeats_and_noise_are_rejected(client, scripted):
     campaign = await new_campaign(client, "My name is Ada. I am a courier in the harbor city of Ost.")

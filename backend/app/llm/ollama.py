@@ -28,6 +28,10 @@ class OllamaProvider:
     async def health(self) -> dict[str, Any]:
         try:
             names = await self.list_models()
+            selected = self.model.casefold().removesuffix(":latest")
+            if not any(name.casefold().removesuffix(":latest") == selected for name in names):
+                return {"status": "offline", "provider": "ollama", "model": self.model,
+                        "available_models": names, "detail": "Selected model is not installed in Ollama."}
             return {"status": "connected", "provider": "ollama", "model": self.model,
                     "available_models": names}
         except ModelUnavailable as exc:
@@ -35,11 +39,15 @@ class OllamaProvider:
                     "detail": str(exc)[:240]}
 
     async def _request(self, messages: list[dict[str, str]], stream: bool = False, json_mode: bool = False, **options: Any) -> httpx.Response:
+        json_schema = options.pop("json_schema", None)
+        generation = {"temperature": options.pop("temperature", settings.llm_temperature),
+                      "num_predict": options.pop("max_tokens", settings.llm_max_output_tokens)}
+        if "num_ctx" in options:
+            generation["num_ctx"] = options.pop("num_ctx")
         body = {"model": self.model, "messages": messages, "stream": stream, "think": False,
-                "options": {"temperature": options.pop("temperature", settings.llm_temperature),
-                            "num_predict": options.pop("max_tokens", settings.llm_max_output_tokens)}, **options}
+                "options": generation, **options}
         if json_mode:
-            body["format"] = "json"
+            body["format"] = json_schema or "json"
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(f"{self.base_url}/api/chat", json=body)
@@ -63,9 +71,12 @@ class OllamaProvider:
             raise ModelUnavailable(f"Ollama returned invalid JSON output: {exc}") from exc
 
     async def stream_chat(self, messages: list[dict[str, str]], **options: Any) -> AsyncIterator[str]:
+        generation = {"temperature": options.pop("temperature", settings.llm_temperature),
+                      "num_predict": options.pop("max_tokens", settings.llm_max_output_tokens)}
+        if "num_ctx" in options:
+            generation["num_ctx"] = options.pop("num_ctx")
         body = {"model": self.model, "messages": messages, "stream": True, "think": False,
-                "options": {"temperature": options.pop("temperature", settings.llm_temperature),
-                            "num_predict": options.pop("max_tokens", settings.llm_max_output_tokens)}, **options}
+                "options": generation, **options}
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 async with client.stream("POST", f"{self.base_url}/api/chat", json=body) as response:

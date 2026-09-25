@@ -68,7 +68,7 @@ async def deterministic_summary(session: AsyncSession, campaign: Campaign, branc
 
 async def update_campaign_summary(session: AsyncSession, provider: LLMProvider | None, campaign: Campaign,
                                   branch_id: UUID, head_turn_id: UUID | None, turn_index: int,
-                                  *, force: bool = False) -> CampaignSummary | None:
+                                  *, force: bool = False, model_context_window: int | None = None) -> CampaignSummary | None:
     existing = await session.scalar(select(CampaignSummary).where(
         CampaignSummary.branch_id == branch_id, CampaignSummary.summary_type == "campaign"))
     if not force and not summary_due(existing, turn_index):
@@ -92,7 +92,8 @@ async def update_campaign_summary(session: AsyncSession, provider: LLMProvider |
             raw = await provider.complete_json([
                 {"role": "system", "content": PROMPT},
                 {"role": "user", "content": f"Previous summary:\n{existing.content}\n\nNew turns:\n{transcript}"},
-            ], max_tokens=900, temperature=0.1)
+            ], max_tokens=900, temperature=0.1,
+                **({"num_ctx": model_context_window} if model_context_window else {}))
             summary = str(parse_json_response(raw).get("summary", "")).strip()[:8000]
             if len(summary) < 40:
                 raise ValueError("Summary model returned an empty or tiny summary.")

@@ -28,6 +28,18 @@ def mlx_base_url(base_url: str | None = None) -> str:
     return urlunsplit((parsed.scheme, gateway.netloc, parsed.path, parsed.query, parsed.fragment))
 
 
+def ollama_base_url(base_url: str) -> str:
+    """Reach a Mac-hosted Ollama from the Docker API without changing native URLs."""
+    if platform.system() != "Linux" or not settings.host_mlx_supported:
+        return base_url
+    parsed = urlsplit(base_url)
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return base_url
+    gateway = urlsplit(settings.mlx_host_base_url)
+    return urlunsplit((parsed.scheme, f"{gateway.hostname}:{parsed.port or 11434}",
+                       parsed.path, parsed.query, parsed.fragment))
+
+
 class MLXProvider(OpenAICompatibleProvider):
     @staticmethod
     def _narration_options(options: dict) -> dict:
@@ -113,7 +125,8 @@ class DeepSeekProvider(OpenAICompatibleProvider):
 def get_provider(provider: str | None = None, base_url: str | None = None, model: str | None = None) -> LLMProvider:
     kind = (provider or settings.llm_provider).casefold()
     if kind == "ollama":
-        return OllamaProvider(base_url=base_url or settings.llm_base_url, model=model or settings.llm_model)
+        return OllamaProvider(base_url=ollama_base_url(base_url or settings.llm_base_url),
+                              model=model or settings.llm_model)
     if kind == "mlx":
         return MLXProvider(base_url=mlx_base_url(base_url or settings.llm_base_url), model=model or settings.llm_model)
     if kind == "deepseek":

@@ -129,7 +129,15 @@ async def ensure_hidden_canon(session: AsyncSession, campaign: Campaign, branch:
 async def _request_interpretation(routed: RoutedModel, messages: list[dict[str, str]], diagnostics: dict[str, Any]
                                   ) -> StateInterpretation | None:
     """One model's attempt: parse, one schema repair, then salvage of valid operations."""
-    raw = await routed.provider.complete_json(messages, temperature=0.1, max_tokens=2200)
+    options = {"max_tokens": 2200}
+    if routed.kind == "ollama" and routed.profile:
+        options["num_ctx"] = routed.profile.context_window
+    raw = await routed.provider.complete_json(
+        messages, temperature=routed.profile.temperature if routed.profile else 0.1, **options)
+    try:
+        json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        diagnostics["malformed_json_responses"] = diagnostics.get("malformed_json_responses", 0) + 1
     if settings.state_debug:
         diagnostics.setdefault("raw", []).append(raw[:12000])
     try:
@@ -141,7 +149,11 @@ async def _request_interpretation(routed: RoutedModel, messages: list[dict[str, 
             {"role": "user", "content": "Correct the JSON to match the required schema. Every value must be an object. "
              "Visibility is PLAYER_KNOWN or GM_ONLY. Drop any operation you cannot express. Return only the JSON. "
              f"Validation error: {str(first_error)[:800]}"},
-        ], temperature=0.0, max_tokens=2200)
+        ], temperature=0.0, **options)
+        try:
+            json.loads(retry)
+        except (json.JSONDecodeError, TypeError):
+            diagnostics["malformed_json_responses"] = diagnostics.get("malformed_json_responses", 0) + 1
         if settings.state_debug:
             diagnostics["raw"].append(retry[:12000])
         try:

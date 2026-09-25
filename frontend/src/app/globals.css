@@ -325,6 +325,8 @@
 .role-model-refresh:hover:not(:disabled){border-color:var(--gold);color:var(--gold)}.role-model-refresh:disabled{opacity:.6;cursor:default}
 .role-model-status{color:var(--quiet);font-size:11px;line-height:1.4}
 .role-chip{justify-self:start;padding:5px 10px;border:1px solid var(--line-strong);border-radius:999px;color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px}
+.role-effective-model{justify-self:start;color:var(--muted);font-size:11px;overflow-wrap:anywhere;max-width:190px}
+.model-roles-body>.field-help{padding:10px 14px 0;margin:0}
 .role-switch{display:flex!important;align-items:center;gap:8px;grid-template-columns:none!important}
 .role-switch input{width:34px!important;height:18px!important;min-height:18px!important;accent-color:var(--gold)}
 .privacy-callout{display:flex;gap:10px;margin:4px 14px 10px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--warm) 50%,var(--line));border-radius:4px;background:color-mix(in srgb,var(--warm) 14%,var(--surface));color:var(--ink);font-size:12px;line-height:1.5}

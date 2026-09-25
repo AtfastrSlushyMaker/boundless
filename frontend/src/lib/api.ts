@@ -155,6 +155,11 @@ export type ModelRoleSetting = {
 export type ModelRoles = {
   narrator: Partial<ModelSettings>; narrator_hosted: boolean; roles: ModelRoleSetting[]; hosted_fallback_enabled: boolean;
 };
+export type AIHealth = {
+  status: string; database: string;
+  model: { status: string; model?: string; selection?: string };
+  roles?: Record<"narrator" | "state" | "summary", { status: string; provider: string; model: string; hosted: boolean; source_role: string; detail?: string }>;
+};
 export type RepairFinding = {
   id: string; type: string; confidence: "HIGH" | "PROBABLE" | "AMBIGUOUS"; summary: string; evidence: string[]; auto: boolean;
 };
@@ -246,7 +251,7 @@ export const api = {
   updateNote: (campaignId: string, noteId: string, payload: NoteWrite) =>
     request<CampaignNote>(`/api/campaigns/${campaignId}/notes/${noteId}`, json("PATCH", payload)),
   deleteNote: (campaignId: string, noteId: string) => request<void>(`/api/campaigns/${campaignId}/notes/${noteId}`, { method: "DELETE" }),
-  health: () => request<{ status: string; database: string; model: { status: string; model?: string; selection?: string } }>("/api/health"),
+  health: () => request<AIHealth>("/api/health"),
   capabilities: () => request<SystemCapabilities>("/api/system/capabilities"),
   campaigns: (archived = false) => request<CampaignCard[]>(`/api/campaigns?include_archived=${archived}`),
   campaign: (id: string, branchId?: string) => request<CampaignDetail>(`/api/campaigns/${id}${branchId ? `?branch_id=${branchId}` : ""}`),

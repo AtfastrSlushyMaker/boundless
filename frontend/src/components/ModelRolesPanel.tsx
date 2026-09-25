@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { ChevronDown, CloudAlert, LoaderCircle, RefreshCw, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, ModelRole, ModelRoleSetting, ModelSettings } from "@/lib/api";
@@ -92,6 +92,7 @@ export function ModelRolesPanel({ narratorLabel }: { narratorLabel: string }) {
   const reduceMotion = useReducedMotion();
   const [open, setOpen] = useState(false);
   const roles = useQuery({ queryKey: ["model-roles"], queryFn: api.modelRoles, enabled: open });
+  const health = useQuery({ queryKey: ["health"], queryFn: api.health, enabled: open, refetchInterval: open ? 18_000 : false });
   const [draft, setDraft] = useState<Draft | null>(null);
   const [fallback, setFallback] = useState<boolean | null>(null);
   const [message, setMessage] = useState("");
@@ -117,17 +118,26 @@ export function ModelRolesPanel({ narratorLabel }: { narratorLabel: string }) {
     onSuccess: async () => {
       setDraft(null); setFallback(null); setMessage("AI roles saved.");
       await client.invalidateQueries({ queryKey: ["model-roles"] });
+      await client.invalidateQueries({ queryKey: ["health"] });
     },
     onError: (error) => setMessage(error.message),
   });
   const hostedRoles = form ? (["state", "summary", "canon_repair", "mature"] as const).filter((role) => !form[role].inherit && hostedProvider(form[role])) : [];
   const narratorLocal = roles.data ? !roles.data.narrator_hosted : true;
+  const savedLocal = roles.data && !roles.data.narrator_hosted && !roles.data.hosted_fallback_enabled
+    && roles.data.roles.filter((row) => row.role !== "state_fallback" && row.role !== "mature").every((row) => !row.effective?.hosted)
+    && roles.data.roles.filter((row) => row.role === "mature" && !row.inherit).every((row) => !row.hosted);
+  const roleStatus = (role: "narrator" | "state" | "summary") => {
+    const check = health.data?.roles?.[role];
+    return check ? `Saved: ${check.provider.toUpperCase()} · ${check.hosted ? "Hosted" : "Local"} · ${check.status === "connected" ? "Online" : check.status === "loading" ? "Loading" : "Offline"}` : "Checking connection…";
+  };
 
   const roleFields = (role: ModelRole) => form && <div className="role-fields">
     <label><span>Runtime</span>
       <select value={form[role].provider} onChange={(event) => {
         const provider = event.target.value as ModelSettings["provider"];
-        update(role, { provider, base_url: DEFAULT_ENDPOINTS[provider], model: provider === "deepseek" ? "deepseek-flash" : form[role].model });
+        update(role, { provider, base_url: DEFAULT_ENDPOINTS[provider], model: provider === "deepseek" ? "deepseek-flash" : form[role].model,
+          ...(provider === "ollama" && (role === "state" || role === "summary") ? { context_window: 8_192, temperature: 0.1 } : {}) });
       }}>
         <option value="mlx">Apple Silicon · MLX</option><option value="ollama">Ollama</option>
         <option value="openai-compatible">OpenAI-compatible API</option><option value="deepseek">DeepSeek (hosted)</option>
@@ -136,6 +146,14 @@ export function ModelRolesPanel({ narratorLabel }: { narratorLabel: string }) {
       <input value={form[role].base_url || DEFAULT_ENDPOINTS[form[role].provider]} onChange={(event) => update(role, { base_url: event.target.value })} spellCheck={false} /></label>}
     <RoleModelField provider={form[role].provider} baseUrl={form[role].base_url || DEFAULT_ENDPOINTS[form[role].provider]}
       value={form[role].model} onChange={(model) => update(role, { model })} />
+    {(role === "state" || role === "summary") && <>
+      <label><span>Context window</span><select value={form[role].context_window} onChange={(event) => update(role, { context_window: Number(event.target.value) })}>
+        {[8_192, 16_384, 32_768, 65_536, 131_072, 262_144, 524_288, 1_000_000].map((size) =>
+          <option key={size} value={size}>{size === 1_000_000 ? "1M" : `${size / 1024}K`} tokens</option>)}
+      </select></label>
+      <label><span>Temperature</span><input type="number" min="0" max="2" step="0.05" value={form[role].temperature}
+        onChange={(event) => update(role, { temperature: Number(event.target.value) })} /></label>
+    </>}
   </div>;
 
   return <section className={`model-roles${open ? " is-open" : ""}`}>
@@ -143,24 +161,23 @@ export function ModelRolesPanel({ narratorLabel }: { narratorLabel: string }) {
       <span><strong>Advanced · AI roles</strong><small>Use different models for narration and bookkeeping.</small></span>
       <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: reduceMotion ? 0 : 0.2 }}><ChevronDown size={16} /></motion.span>
     </button>
-    <AnimatePresence initial={false}>
-      {open && <motion.div key="roles" className="model-roles-body" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
-        exit={{ height: 0, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}>
+      {open && <div className="model-roles-body">
         {roles.isLoading && <p className="field-help"><LoaderCircle size={13} className="spin" /> Loading roles…</p>}
+        {savedLocal && <p className="field-help" role="status">Saved setup: local AI roles. Hosted fallback off.</p>}
         {form && <div className="model-roles-grid">
-          <div className="role-row role-row--fixed"><div><strong>Narrator</strong><small>Tells the story.</small></div><span className="role-chip">{narratorLabel}</span></div>
+          <div className="role-row role-row--fixed"><div><strong>Narrator</strong><small>Tells the story. {roleStatus("narrator")}</small></div><span className="role-effective-model">{narratorLabel}</span></div>
           {(["state", "summary", "canon_repair", "mature"] as const).map((role) => <div className="role-row" key={role}>
-            <div><strong>{ROLE_COPY[role].label}</strong><small>{ROLE_COPY[role].help}</small></div>
+            <div><strong>{ROLE_COPY[role].label}</strong><small>{ROLE_COPY[role].help}{(role === "state" || role === "summary") && <> {roleStatus(role)}</>}</small></div>
             <select aria-label={`${ROLE_COPY[role].label} model`} value={form[role].inherit ? "inherit" : "custom"}
               onChange={(event) => update(role, { inherit: event.target.value === "inherit" })}>
               <option value="inherit">{ROLE_COPY[role].inherit}</option><option value="custom">Choose a model…</option>
             </select>
-            <AnimatePresence initial={false}>{!form[role].inherit && <motion.div key="fields" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>{roleFields(role)}</motion.div>}</AnimatePresence>
+            {!form[role].inherit && <div>{roleFields(role)}</div>}
           </div>)}
           <div className="role-row">
             <div><strong>Hosted fallback for state tracking</strong><small>Only when the state model cannot produce usable output after a repair attempt.</small></div>
             <label className="role-switch"><input type="checkbox" checked={fallbackOn} onChange={(event) => setFallback(event.target.checked)} /><span>{fallbackOn ? "Enabled" : "Disabled"}</span></label>
-            <AnimatePresence initial={false}>{fallbackOn && <motion.div key="fallback" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>{roleFields("state_fallback")}</motion.div>}</AnimatePresence>
+            {fallbackOn && <div>{roleFields("state_fallback")}</div>}
           </div>
         </div>}
         {(hostedRoles.length > 0 || fallbackOn) && <div className="privacy-callout" role="note">
@@ -171,7 +188,6 @@ export function ModelRolesPanel({ narratorLabel }: { narratorLabel: string }) {
         {message && <p className="form-message" role="status">{message}</p>}
         <div className="model-roles-actions"><button type="button" className="quiet-button" disabled={save.isPending || !form} onClick={() => save.mutate()}>
           {save.isPending ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />}<span>Save AI roles</span></button></div>
-      </motion.div>}
-    </AnimatePresence>
+      </div>}
   </section>;
 }

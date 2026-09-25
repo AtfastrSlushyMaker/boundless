@@ -50,7 +50,9 @@ async def _summary(session: AsyncSession, job: PostTurnJob, factory: Callable) -
     from app.db.models import Turn
     head = await session.get(Turn, branch.head_turn_id)
     await update_campaign_summary(session, routed.provider, campaign, branch.id, branch.head_turn_id,
-                                  head.turn_index if head else 0, force=bool(job.payload.get("force")))
+                                  head.turn_index if head else 0, force=bool(job.payload.get("force")),
+                                  model_context_window=routed.profile.context_window
+                                  if routed.kind == "ollama" and routed.profile else None)
 
 
 async def _constitution(session: AsyncSession, job: PostTurnJob, factory: Callable) -> None:
@@ -61,7 +63,8 @@ async def _constitution(session: AsyncSession, job: PostTurnJob, factory: Callab
     raw = await routed.provider.complete_json([
         {"role": "system", "content": CONSTITUTION_PROMPT},
         {"role": "user", "content": campaign.original_prompt[:24_000]},
-    ], temperature=0.0, max_tokens=1800)
+    ], temperature=0.0, max_tokens=1800,
+        **({"num_ctx": routed.profile.context_window} if routed.kind == "ollama" and routed.profile else {}))
     extracted = parse_json_response(raw)
     await merge_extracted_constitution(session, campaign, extracted, model=routed.describe())
 

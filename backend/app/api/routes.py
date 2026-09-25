@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import platform
@@ -44,7 +45,7 @@ from app.db.models import (
 )
 from app.db.session import get_session
 from app.llm.base import ModelUnavailable
-from app.llm.gateway import DeepSeekProvider, mlx_base_url
+from app.llm.gateway import DeepSeekProvider, mlx_base_url, ollama_base_url
 from app.llm.ollama import OllamaProvider
 from app.llm.openai_compatible import OpenAICompatibleProvider
 from app.llm.router import ROLES, is_hosted, role_profile, route, visual_model
@@ -289,13 +290,25 @@ async def health(session: AsyncSession = Depends(get_session)):
     except Exception:
         database = "offline"
     if database == "offline":
-        return {"status": "degraded", "database": "offline", "model": {"status": "unknown"}, "version": "0.1.0"}
-    profile = await active_profile(session)
-    provider = provider_for_profile(profile)
-    model = await provider.health()
-    model["selection"] = profile.provider if profile else settings.llm_provider
-    return {"status": "ok" if database == "connected" else "degraded", "database": database,
-            "model": model, "version": "0.1.0"}
+        return {"status": "degraded", "database": "offline", "model": {"status": "unknown"},
+                "roles": {}, "version": "0.1.0"}
+    routed = {role: await route(session, role, provider_for_profile)
+              for role in ("narrator", "state", "summary")}
+    unique = {}
+    for role, selection in routed.items():
+        key = (selection.kind, selection.model_name,
+               selection.profile.base_url if selection.profile else settings.llm_base_url)
+        unique.setdefault(key, selection.provider)
+    checks = await asyncio.gather(*(provider.health() for provider in unique.values()))
+    checked = dict(zip(unique, checks, strict=True))
+    roles = {}
+    for role, selection in routed.items():
+        key = (selection.kind, selection.model_name,
+               selection.profile.base_url if selection.profile else settings.llm_base_url)
+        roles[role] = {**checked[key], **selection.describe()}
+    model = {**roles["narrator"], "selection": routed["narrator"].kind}
+    return {"status": "ok" if all(row["status"] == "connected" for row in roles.values()) else "degraded",
+            "database": database, "model": model, "roles": roles, "version": "0.1.0"}
 
 
 @router.get("/system/capabilities")
@@ -348,7 +361,7 @@ async def list_ollama_models(base_url: str = Query(default="http://127.0.0.1:114
     if not base_url.startswith(("http://", "https://")):
         raise HTTPException(422, "Ollama endpoint must begin with http:// or https://.")
     try:
-        return {"models": await OllamaProvider(base_url=base_url).list_models()}
+        return {"models": await OllamaProvider(base_url=ollama_base_url(base_url)).list_models()}
     except ModelUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
 

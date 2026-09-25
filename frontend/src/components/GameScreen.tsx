@@ -253,6 +253,10 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
   const latestTurn = campaign?.turns.at(-1);
   const latestChoices = latestTurn?.suggested_actions ?? [];
   const modelReady = health.data?.model?.status === "connected";
+  const stateReady = health.data?.roles?.state?.status === "connected";
+  const summaryReady = health.data?.roles?.summary?.status === "connected";
+  const aiStatus = !modelReady ? health.data?.model?.status === "loading" ? "Narrator loading" : "Narrator offline"
+    : !stateReady ? "State tracking offline" : !summaryReady ? "Summary offline" : "AI roles ready";
 
   const changeGameMode = useMutation({
     mutationFn: (gameMode: GameMode) => {
@@ -479,9 +483,10 @@ export function GameScreen({ campaignId, requestedBranchId }: { campaignId: stri
               {campaign.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
             </select><ChevronDown size={14} />
           </div>
-          <button className="connection-indicator game-model" onClick={() => setSettingsOpen(true)}>
-            <span className={`status-mark ${modelReady ? "status-mark--on" : "status-mark--off"}`} />
-            <span>{modelReady ? "Model ready" : health.data?.model?.status === "loading" ? "Model loading" : "Model offline"}</span>
+          <button className="connection-indicator game-model" aria-label={`${aiStatus}. Open model settings`}
+            onClick={() => setSettingsOpen(true)}>
+            <span className={`status-mark ${modelReady && stateReady && summaryReady ? "status-mark--on" : "status-mark--off"}`} />
+            <span>{aiStatus}</span>
           </button>
           <SchemeToggle />
           <button className="icon-button" aria-label="Model settings" onClick={() => setSettingsOpen(true)}><Settings2 size={18} /></button>
