@@ -213,7 +213,7 @@ export function CreateWorldDialog({ open, busy, error, onClose, onCreate, onEnha
                     <button type="button" role="radio" aria-checked={gameMode === "guided"} onClick={() => setGameMode("guided")} disabled={locked}>
                       <ListChecks size={18} /><strong>Offer me choices</strong><small>Three suggestions after each scene; you can still write your own.</small></button>
                   </div>
-                  {matureWriter && <p className="composer-note">Mature scenes between adults are written by <strong>{matureWriter.model.split("/").pop()}</strong>, as set in AI roles.</p>}
+                  {matureWriter && <p className="composer-note">Explicit scenes between adults (sex, graphic violence, gore) are written by <strong>{matureWriter.model.split("/").pop()}</strong>, as set in AI roles.</p>}
                 </div>}
               </motion.div>
             </AnimatePresence>

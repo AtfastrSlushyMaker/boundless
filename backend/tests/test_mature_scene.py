@@ -56,6 +56,9 @@ async def enable_writer(client):
 def test_explicit_detection_and_writer_prompt():
     assert explicit_score("I kiss her neck and undress her.", "") >= 2
     assert explicit_score("I ask the clerk about the parcel.", "The harbor is quiet.") == 0
+    assert explicit_score("I drive the blade into his gut and twist.", "Blood soaks the floor; his wounds gape.") >= 2
+    assert "gore and injuries" in WRITER_RULES and "only between adults" in WRITER_RULES
+    assert len(WRITER_RULES.splitlines()) <= 5, "small models follow a short prompt better"
     messages = [{"role": "system", "content": "GM rules"}, {"role": "user", "content": "I kiss her."}]
     written = writer_messages(messages, "- beat one")
     assert WRITER_RULES in written[0]["content"] and "- beat one" in written[-1]["content"]
@@ -83,7 +86,7 @@ async def test_ordinary_turns_and_possible_minors_stay_with_the_narrator(client,
     await enable_writer(client)
     campaign = await new_campaign(client, "My name is Ada, a courier in the harbor city of Ost.")
     assert (await play(client, campaign, "I hand the parcel to the clerk."))["type"] == "complete"
-    assert (await play(client, campaign, "I kiss the girl and undress her."))["type"] == "complete"
+    assert (await play(client, campaign, "I kiss the teenage girl and undress her."))["type"] == "complete"
     assert writer.prompts == [] and narrator.plans == []
 
 
@@ -93,3 +96,20 @@ async def test_without_a_mature_model_the_narrator_writes_everything(client, cle
     campaign = await new_campaign(client, "My name is Ada, a courier in the harbor city of Ost.")
     assert (await play(client, campaign, "I kiss the courtesan and undress her."))["type"] == "complete"
     assert writer.prompts == [] and narrator.plans == []
+
+
+@pytest.mark.asyncio
+async def test_graphic_violence_also_goes_to_the_mature_writer(client, clean_roles, models):  # noqa: F811
+    narrator, writer = models
+    await enable_writer(client)
+    campaign = await new_campaign(client, "My name is Ada, a grown woman and a mercenary in the harbor city of Ost.")
+    writer.narrations.append("The blade opens the smuggler's arm to the bone and blood sheets onto the planks.")
+    event = await play(client, campaign, "I stab the smuggler and drive the blade until the wound tears open.")
+    assert event["type"] == "complete"
+    assert narrator.plans and writer.prompts, "violent turns are planned by the narrator and written by the mature model"
+
+
+def test_minor_check_needs_a_clear_signal():
+    from app.services.mature_scene import CLEAR_MINOR
+    assert not CLEAR_MINOR.search("The girl at the bar is thirty, with a minor wound on her arm.")
+    assert CLEAR_MINOR.search("a teenage courier") and CLEAR_MINOR.search("the child hides")
